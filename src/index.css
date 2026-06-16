@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* IA palette as CSS custom properties.
+   Tailwind utilities (bg-ia-navy, etc.) are the preferred way to apply
+   palette colors; these vars are here for cases where Tailwind doesn't
+   fit (e.g. inline styles, dynamic colors driven by data). */
+:root {
+  --ia-navy: #1A2744;
+  --ia-navy-700: #243454;
+  --ia-teal: #0E7C7B;
+  --ia-teal-700: #0a5e5d;
+  --ia-teal-light: #E0F0EF;
+  --ia-cream: #F5F0EB;
+  --ia-cream-dark: #ECE5DA;
+  --ia-ink: #333333;
+  --ia-muted: #6b7280;
+  --ia-border: #E5E1DA;
+  --ia-danger: #b91c1c;
+  --ia-warning: #b45309;
+  --ia-success: #0f766e;
+}
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-ia-cream text-ia-ink font-sans antialiased;
+  }
+  a {
+    @apply text-ia-teal hover:text-ia-teal-700 underline-offset-2;
+  }
+  h1, h2, h3, h4 {
+    @apply text-ia-navy font-semibold tracking-tight;
+  }
+  h1 { @apply text-2xl; }
+  h2 { @apply text-xl; }
+  h3 { @apply text-lg; }
+  code {
+    @apply font-mono text-sm bg-ia-cream-dark px-1 py-0.5 rounded;
+  }
+}
+
+@layer components {
+  .ia-card {
+    @apply bg-white border border-ia-border rounded-lg shadow-ia-card p-5;
+  }
+  .ia-card-tight {
+    @apply bg-white border border-ia-border rounded-lg shadow-ia-card p-3;
+  }
+  .ia-button {
+    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium
+           bg-ia-teal text-white hover:bg-ia-teal-700 transition-colors
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .ia-button-ghost {
+    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium
+           text-ia-navy hover:bg-ia-cream-dark transition-colors;
+  }
+  .ia-button-danger {
+    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium
+           bg-ia-danger text-white hover:opacity-90 transition-opacity;
+  }
+  .ia-input {
+    @apply w-full px-3 py-2 border border-ia-border rounded-md text-sm
+           focus:outline-none focus:ring-2 focus:ring-ia-teal focus:border-transparent
+           placeholder-ia-muted;
+  }
+  .ia-pill {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+  .ia-pill-success { @apply ia-pill bg-emerald-50 text-emerald-700; }
+  .ia-pill-warning { @apply ia-pill bg-amber-50 text-amber-700; }
+  .ia-pill-danger  { @apply ia-pill bg-red-50 text-red-700; }
+  .ia-pill-info    { @apply ia-pill bg-ia-teal-light text-ia-teal-700; }
+  .ia-pill-muted   { @apply ia-pill bg-ia-cream-dark text-ia-muted; }
+  .ia-table {
+    @apply w-full text-sm;
+  }
+  .ia-table thead th {
+    @apply text-left font-medium text-ia-muted px-3 py-2 border-b border-ia-border;
+  }
+  .ia-table tbody td {
+    @apply px-3 py-2 border-b border-ia-border;
+  }
+  .ia-table tbody tr:hover {
+    @apply bg-ia-cream;
+  }
+}

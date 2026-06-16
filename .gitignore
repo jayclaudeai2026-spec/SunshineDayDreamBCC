@@ -1,0 +1,37 @@
+# Composio credentials
+.composio/
+*.composio.json
+composio_credentials*
+
+# Supabase local
+.branches
+.temp
+supabase/.env*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+.next/
+dist/
+build/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Logs
+*.log
+npm-debug.log*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

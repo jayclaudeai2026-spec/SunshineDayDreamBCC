@@ -1,0 +1,455 @@
+// Single-message pipeline: the core work of email-ingest.
+//
+// Spec (from 2026-06-15 handoff briefing, session_note ad66d517):
+//   1. Idempotency: dedupe on gmail_message_id
+//   2. Fetch full Gmail message
+//   3. Extract attachments, filter CSVs
+//   4. 5-layer entity identification (never reject; manual_queue fallback)
+//   5. Parse reporting period from subject/filename
+//   6. Archive CSVs to Google Drive at <bcc_root>/<entity_short>/<YYYY>/<MM>/
+//   7. INSERT ingest_log
+//   8. Send ingest_receipt to bookkeeper (draft → verify → send)
+//   9. Leave parse_result='pending' for parser (Step 3) to pick up
+//
+// Critical principles:
+//   - NEVER fail silently
+//   - NEVER roll back ingest_log if downstream fails — the row is the durable record
+//   - Drive archive failure → log, continue with empty drive_file_ids
+//   - Receipt send failure → log to email_send_log status='failed', return success
+
+import type { SupabaseClient } from "../_shared/supabase.ts";
+import { ComposioClient, ComposioError } from "../_shared/composio.ts";
+import {
+  extractAttachments,
+  fetchMessage,
+  filterCsv,
+  findHeader,
+  getAttachmentS3Key,
+  parseEmailAddress,
+} from "../_shared/gmail.ts";
+import {
+  resolveOrCreateFolder,
+  uploadFileToFolder,
+} from "../_shared/drive.ts";
+import { identifyEntity } from "../_shared/entity_id.ts";
+import {
+  escapeHtml,
+  parseReportingPeriod,
+  periodLabel,
+  renderTemplate,
+} from "../_shared/template.ts";
+import type { IngestPipelineResult } from "../_shared/types.ts";
+
+export async function processMessage(args: {
+  sb: SupabaseClient;
+  composio: ComposioClient;
+  message_id: string;
+}): Promise<IngestPipelineResult> {
+  const { sb, composio, message_id } = args;
+
+  // ===== 1. Idempotency =====
+  const { data: existing } = await sb
+    .from("ingest_log")
+    .select("id, entity_id")
+    .eq("gmail_message_id", message_id)
+    .maybeSingle();
+
+  if (existing) {
+    return {
+      status: "duplicate",
+      ingest_id: existing.id as number,
+      message_id,
+      entity_id: (existing.entity_id as number | null) ?? null,
+    };
+  }
+
+  // ===== 2. Fetch full message =====
+  const msg = await fetchMessage(composio, message_id);
+
+  const fromEmail = parseEmailAddress(findHeader(msg, "From")) ?? "unknown";
+  const toEmail = parseEmailAddress(findHeader(msg, "To")) ?? "unknown";
+  const subject = findHeader(msg, "Subject") ?? "";
+
+  // ===== 3. Extract attachments, filter CSVs =====
+  const allAttachments = extractAttachments(msg);
+  const csvs = filterCsv(allAttachments);
+
+  // ===== 4. Entity identification =====
+  // Use CSVs for filename layer if present, else fall back to all attachment names
+  const ident = await identifyEntity({
+    sb,
+    subject,
+    from_email: fromEmail,
+    attachments: csvs.length > 0 ? csvs : allAttachments,
+  });
+
+  // ===== 5. Reporting period =====
+  const filenameStrings = csvs.map((a) => a.filename);
+  const reportingPeriod = parseReportingPeriod([subject, ...filenameStrings]);
+
+  // ===== 6. Drive archive =====
+  let driveFolderId: string | null = null;
+  const driveFileIds: string[] = [];
+  let driveError: string | null = null;
+
+  if (csvs.length > 0) {
+    try {
+      const { data: ctx, error: ctxErr } = await sb
+        .from("client_context")
+        .select("drive_folder_mappings")
+        .eq("client_id", "main")
+        .maybeSingle();
+      if (ctxErr) {
+        throw new Error(`client_context read failed: ${ctxErr.message}`);
+      }
+      const mappings =
+        (ctx?.drive_folder_mappings ?? {}) as Record<string, unknown>;
+      const bccRoot = mappings.bcc_root as string | undefined;
+
+      if (!bccRoot) {
+        driveError =
+          "No bcc_root in client_context.drive_folder_mappings — Drive archive skipped";
+        console.warn(driveError);
+      } else {
+        // Resolve entity_short_name for the path segment
+        let entityShort = "_unidentified";
+        if (ident.entity_id) {
+          const { data: e } = await sb
+            .from("entities")
+            .select("entity_short_name")
+            .eq("id", ident.entity_id)
+            .maybeSingle();
+          if (e?.entity_short_name) {
+            entityShort = e.entity_short_name as string;
+          }
+        }
+
+        const yyyy = reportingPeriod
+          ? reportingPeriod.slice(0, 4)
+          : "_unknown_year";
+        const mm = reportingPeriod
+          ? reportingPeriod.slice(5, 7)
+          : "_unknown_month";
+
+        driveFolderId = await resolveOrCreateFolder(
+          composio,
+          sb,
+          bccRoot,
+          [entityShort, yyyy, mm],
+        );
+
+        for (const csv of csvs) {
+          const { s3key } = await getAttachmentS3Key(composio, {
+            message_id,
+            attachment_id: csv.attachment_id,
+            file_name: csv.filename,
+          });
+          const fileId = await uploadFileToFolder(composio, {
+            folder_id: driveFolderId,
+            name: csv.filename,
+            mimetype: csv.mime_type || "text/csv",
+            s3key,
+          });
+          driveFileIds.push(fileId);
+        }
+      }
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      driveError = m;
+      console.error(`Drive archive failed for ${message_id}: ${m}`);
+      // intentional: continue to write the ingest_log row regardless
+    }
+  }
+
+  // ===== 7. Insert ingest_log =====
+  const parseResult = ident.method === "manual_queue"
+    ? "manual_queue_required"
+    : "pending";
+
+  const errorDetails: Record<string, unknown> = {};
+  if (driveError) errorDetails.drive_archive_error = driveError;
+  if (csvs.length === 0 && allAttachments.length > 0) {
+    errorDetails.no_csv_attachments = true;
+    errorDetails.non_csv_attachment_count = allAttachments.length;
+  }
+  if (csvs.length === 0 && allAttachments.length === 0) {
+    errorDetails.no_attachments = true;
+  }
+
+  const { data: inserted, error: insErr } = await sb
+    .from("ingest_log")
+    .insert({
+      received_at: new Date().toISOString(),
+      gmail_message_id: msg.id,
+      gmail_thread_id: msg.threadId,
+      from_email: fromEmail,
+      to_email: toEmail,
+      subject,
+      attachment_count: csvs.length,
+      attachment_names: csvs.map((a) => a.filename),
+      entity_id: ident.entity_id,
+      entity_identification_method: ident.method,
+      entity_identification_confidence: ident.confidence,
+      reporting_period: reportingPeriod,
+      drive_folder_id: driveFolderId,
+      drive_file_ids: driveFileIds,
+      parse_result: parseResult,
+      error_details: errorDetails,
+    })
+    .select("id")
+    .single();
+
+  if (insErr || !inserted) {
+    throw new Error(
+      `ingest_log insert failed: ${insErr?.message ?? "no row returned"}`,
+    );
+  }
+
+  const ingestId = inserted.id as number;
+
+  // ===== 8. Send ingest_receipt (best-effort) =====
+  try {
+    await sendReceipt({
+      sb,
+      composio,
+      ingestId,
+      msg,
+      fromEmail,
+      entity_id: ident.entity_id,
+      reportingPeriod,
+      attachmentNames: csvs.map((a) => a.filename),
+    });
+  } catch (err) {
+    const m = err instanceof Error ? err.message : String(err);
+    console.error(
+      `Receipt send failed for ingest_id=${ingestId}: ${m}`,
+    );
+    // already logged to email_send_log inside sendReceipt
+  }
+
+  // ===== 9. Parser dispatch (Step 3 TODO) =====
+  // For v1: leave parse_result='pending' for non-manual cases. The parser
+  // Edge Function (Step 3, to be built) will sweep pending rows on its own
+  // cron schedule. Direct dispatch can be wired here once the parser exists.
+
+  return {
+    status: ident.method === "manual_queue" ? "manual_queue" : "success",
+    ingest_id: ingestId,
+    message_id,
+    entity_id: ident.entity_id,
+  };
+}
+
+// ----------------------------------------------------------------------------
+// Receipt: draft → verify → send via Composio Gmail
+// ----------------------------------------------------------------------------
+
+async function sendReceipt(args: {
+  sb: SupabaseClient;
+  composio: ComposioClient;
+  ingestId: number;
+  msg: { id: string; threadId: string };
+  fromEmail: string;
+  entity_id: number | null;
+  reportingPeriod: string | null;
+  attachmentNames: string[];
+}): Promise<void> {
+  const {
+    sb,
+    composio,
+    ingestId,
+    msg,
+    fromEmail,
+    entity_id,
+    reportingPeriod,
+    attachmentNames,
+  } = args;
+
+  const { data: tpl, error: tplErr } = await sb
+    .from("email_templates")
+    .select(
+      "template_key, subject_template, html_body_template, text_body_template",
+    )
+    .eq("template_key", "ingest_receipt")
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (tplErr || !tpl) {
+    throw new Error(
+      `ingest_receipt template not found: ${tplErr?.message ?? "no active row"}`,
+    );
+  }
+
+  // Resolve entity display
+  let entityDisplay = "Unidentified — manual review";
+  if (entity_id) {
+    const { data: e } = await sb
+      .from("entities")
+      .select("legal_name, entity_short_name")
+      .eq("id", entity_id)
+      .maybeSingle();
+    if (e) {
+      entityDisplay = (e.legal_name as string | null) ||
+        (e.entity_short_name as string | null) ||
+        entityDisplay;
+    }
+  }
+
+  const attachmentListHtml = attachmentNames.length > 0
+    ? attachmentNames.map((n) => `<li>${escapeHtml(n)}</li>`).join("")
+    : "<li><em>(no attachments)</em></li>";
+
+  const attachmentListText = attachmentNames.length > 0
+    ? attachmentNames.map((n) => `- ${n}`).join("\n")
+    : "- (no attachments)";
+
+  const vars: Record<string, string> = {
+    ENTITY_DISPLAY_NAME: entityDisplay,
+    PERIOD_LABEL: periodLabel(reportingPeriod),
+    ATTACHMENT_LIST_HTML: attachmentListHtml,
+    ATTACHMENT_LIST_TEXT: attachmentListText,
+  };
+
+  const subject = renderTemplate(tpl.subject_template as string, vars);
+  const bodyHtml = renderTemplate(tpl.html_body_template as string, vars);
+  const bodyText = tpl.text_body_template
+    ? renderTemplate(tpl.text_body_template as string, vars)
+    : null;
+
+  // Intake email for audit-only "from"
+  const { data: cc } = await sb
+    .from("client_context")
+    .select("intake_email")
+    .eq("client_id", "main")
+    .maybeSingle();
+  const intakeEmail = (cc?.intake_email as string | undefined) ?? "unknown";
+
+  // Pre-send row
+  const { data: sendRow, error: sendErr } = await sb
+    .from("email_send_log")
+    .insert({
+      template_key: "ingest_receipt",
+      to_email: fromEmail,
+      from_email: intakeEmail,
+      subject,
+      body_html: bodyHtml,
+      body_text: bodyText,
+      status: "queued",
+      related_ingest_id: ingestId,
+      related_entity_id: entity_id,
+    })
+    .select("id")
+    .single();
+
+  if (sendErr || !sendRow) {
+    throw new Error(
+      `email_send_log insert failed: ${sendErr?.message ?? "no row returned"}`,
+    );
+  }
+
+  const sendLogId = sendRow.id as number;
+
+  try {
+    // Create draft as in-thread reply
+    const draftResp = await composio.execute<Record<string, unknown>>(
+      "GMAIL_CREATE_EMAIL_DRAFT",
+      {
+        user_id: "me",
+        recipient_email: fromEmail,
+        subject,
+        body: bodyHtml,
+        is_html: true,
+        thread_id: msg.threadId,
+      },
+    );
+
+    const draftR = unwrap(draftResp) as Record<string, unknown>;
+    const draftMsg =
+      (draftR?.message as Record<string, unknown> | undefined) ?? draftR;
+    const draftId =
+      (draftR?.id as string | undefined) ??
+      (draftMsg?.id as string | undefined);
+    const draftLabels =
+      (draftMsg?.labelIds as string[] | undefined) ??
+      (draftR?.labelIds as string[] | undefined) ??
+      [];
+
+    if (!draftId) {
+      throw new Error(
+        `GMAIL_CREATE_EMAIL_DRAFT returned no draft id: ${
+          JSON.stringify(draftR).slice(0, 300)
+        }`,
+      );
+    }
+
+    await sb
+      .from("email_send_log")
+      .update({ status: "draft", gmail_draft_id: draftId })
+      .eq("id", sendLogId);
+
+    // Verify via GMAIL_GET_DRAFT
+    const verifyResp = await composio.execute<Record<string, unknown>>(
+      "GMAIL_GET_DRAFT",
+      { user_id: "me", draft_id: draftId, format: "metadata" },
+    );
+    const v = unwrap(verifyResp) as Record<string, unknown>;
+    const vMsg = v?.message as Record<string, unknown> | undefined;
+    const vLabels =
+      (vMsg?.labelIds as string[] | undefined) ??
+      (v?.labelIds as string[] | undefined) ??
+      draftLabels;
+    if (!vLabels.includes("DRAFT")) {
+      throw new Error(
+        `Draft verification failed: labelIds=${JSON.stringify(vLabels)}`,
+      );
+    }
+
+    await sb
+      .from("email_send_log")
+      .update({ status: "verified_draft" })
+      .eq("id", sendLogId);
+
+    // Send the draft
+    const sentResp = await composio.execute<Record<string, unknown>>(
+      "GMAIL_SEND_DRAFT",
+      { user_id: "me", draft_id: draftId },
+    );
+    const sentR = unwrap(sentResp) as Record<string, unknown>;
+    const sentMsg = sentR?.message as Record<string, unknown> | undefined;
+    const sentMessageId =
+      (sentR?.id as string | undefined) ??
+      (sentMsg?.id as string | undefined) ??
+      null;
+
+    await sb
+      .from("email_send_log")
+      .update({
+        status: "sent",
+        gmail_message_id: sentMessageId,
+        sent_at: new Date().toISOString(),
+        send_attempted_at: new Date().toISOString(),
+      })
+      .eq("id", sendLogId);
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const isAuth = err instanceof ComposioError && err.is_auth_error;
+    await sb
+      .from("email_send_log")
+      .update({
+        status: "failed",
+        error_message: errMsg.slice(0, 2000),
+        send_attempted_at: new Date().toISOString(),
+        metadata: { auth_error: isAuth, tool: (err as ComposioError)?.tool_slug },
+      })
+      .eq("id", sendLogId);
+    throw err;
+  }
+}
+
+function unwrap(resp: unknown): unknown {
+  if (resp && typeof resp === "object" && "data" in resp) {
+    const inner = (resp as Record<string, unknown>).data;
+    if (inner && typeof inner === "object") return inner;
+  }
+  return resp;
+}
