@@ -220,7 +220,7 @@ function EmailTemplatesTab() {
   if (!templates || templates.length === 0) {
     return (
       <EmptyState icon={FileText} title="No email templates"
-        description="The IA master template ships exactly one template (ingest_receipt). It is seeded automatically by migration 003." />
+        description="The BCC master template ships exactly one template (ingest_receipt). It is seeded automatically by migration 003." />
     );
   }
 

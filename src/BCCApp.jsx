@@ -60,7 +60,7 @@ export default function BCCApp() {
     return <SignInGate />;
   }
 
-  const clientName = ctx?.display_name ?? 'Imaginary AI BCC';
+  const clientName = ctx?.display_name ?? 'Sunshine Daydream BCC';
   const alertCount = alerts?.length ?? 0;
 
   return (
@@ -69,8 +69,8 @@ export default function BCCApp() {
       <header className="bg-white border-b border-ia-border">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-md bg-ia-navy flex items-center justify-center text-white font-bold text-sm">
-              IA
+            <div className="w-8 h-8 rounded-md bg-ia-navy flex items-center justify-center text-white font-bold text-xs">
+              SDD
             </div>
             <div>
               <div className="font-semibold text-ia-navy text-sm leading-tight">{clientName}</div>
@@ -127,7 +127,7 @@ export default function BCCApp() {
 
       <footer className="border-t border-ia-border bg-white">
         <div className="max-w-7xl mx-auto px-4 py-3 text-xs text-ia-muted flex items-center justify-between">
-          <span>BCC powered by Claude — Imaginary AI</span>
+          <span>BCC powered by Claude</span>
           <span>v1.0</span>
         </div>
       </footer>
@@ -141,7 +141,7 @@ function SignInGate() {
     <div className="min-h-screen flex items-center justify-center p-6 bg-ia-cream">
       <div className="ia-card max-w-md w-full text-center">
         <div className="w-12 h-12 rounded-md bg-ia-navy mx-auto flex items-center justify-center text-white font-bold mb-3">
-          IA
+          SDD
         </div>
         <h2 className="text-ia-navy">Sign in to your BCC</h2>
         <p className="mt-2 text-sm text-ia-muted">

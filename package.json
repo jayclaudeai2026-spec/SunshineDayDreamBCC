@@ -1,9 +1,9 @@
 {
-  "name": "ia-bcc-webapp",
+  "name": "sdd-bcc-webapp",
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Imaginary AI Business Command Center — React webapp for the Supabase-backed BCC. Connects to the client's IA Supabase project and surfaces the 11 BCC modules.",
+  "description": "Sunshine Daydream BCC — React webapp for the Supabase-backed Bookkeeping Command Center. Surfaces the 11 BCC modules for Sunshine Daydream Inc. and its related entities.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
