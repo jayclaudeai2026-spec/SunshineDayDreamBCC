@@ -2,9 +2,10 @@
 // - Sidebar nav lists the 11 modules
 // - Top bar shows entity name and any urgent alerts pill
 // - <Outlet> via routes loads the active module
-// - Auth gate: if not signed in (and not in demo mode), show a minimal
-//   sign-in placeholder. Real auth UI ships in a follow-up commit.
+// - Auth gate: if not signed in (and not in demo mode), show the sign-in
+//   form which calls supabase.auth.signInWithPassword.
 
+import { useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import {
   LayoutDashboard, BarChart3, FileText, Brain, Workflow,
@@ -109,7 +110,7 @@ export default function BCCApp() {
         </aside>
         <main className="flex-1 min-w-0">
           <Routes>
-            <Route path="/"            element={<Dashboard />} />
+            <Route path="/"             element={<Dashboard />} />
             <Route path="/financials/*" element={<Financials />} />
             <Route path="/documents/*"  element={<Documents />} />
             <Route path="/memory/*"     element={<PersistentMemory />} />
@@ -135,19 +136,114 @@ export default function BCCApp() {
   );
 }
 
-// ----- Minimal sign-in gate (placeholder for real auth UI) -----------------
+// ----- Real Supabase email/password sign-in --------------------------------
+// Calls supabase.auth.signInWithPassword. useAuthUser subscribes to
+// onAuthStateChange, so a successful sign-in re-renders BCCApp automatically.
 function SignInGate() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
+    try {
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (signInError) throw signInError;
+      // success: useAuthUser handles re-render via onAuthStateChange.
+    } catch (err) {
+      console.error('sign-in error:', err);
+      setError(err?.message ?? 'Sign-in failed. Check your credentials and try again.');
+      setSubmitting(false);
+    }
+  }
+
+  const canSubmit = email.length > 0 && password.length > 0 && !submitting;
+
   return (
     <div className="min-h-screen flex items-center justify-center p-6 bg-ia-cream">
-      <div className="ia-card max-w-md w-full text-center">
-        <div className="w-12 h-12 rounded-md bg-ia-navy mx-auto flex items-center justify-center text-white font-bold mb-3">
-          SDD
+      <div className="ia-card max-w-md w-full">
+        <div className="text-center">
+          <div className="w-12 h-12 rounded-md bg-ia-navy mx-auto flex items-center justify-center text-white font-bold mb-3">
+            SDD
+          </div>
+          <h2 className="text-ia-navy">Sign in to your BCC</h2>
+          <p className="mt-2 text-sm text-ia-muted">
+            Enter your credentials to access the Business Command Center.
+          </p>
         </div>
-        <h2 className="text-ia-navy">Sign in to your BCC</h2>
-        <p className="mt-2 text-sm text-ia-muted">
-          The full sign-in flow ships in a follow-up release. For now, you can authenticate
-          directly via the Supabase dashboard for your project (Authentication → Users → invite),
-          or enable demo mode in <code>.env.local</code> by setting <code>VITE_DEMO_MODE=true</code>.
+
+        <form onSubmit={handleSubmit} className="mt-6 space-y-3" noValidate>
+          <div>
+            <label htmlFor="signin-email" className="block text-xs font-medium text-ia-navy mb-1">
+              Email
+            </label>
+            <input
+              id="signin-email"
+              type="email"
+              autoComplete="username"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              disabled={submitting}
+              className={cn(
+                'w-full px-3 py-2 border border-ia-border rounded-md text-sm',
+                'focus:outline-none focus:ring-2 focus:ring-ia-teal',
+                'disabled:opacity-50',
+              )}
+              placeholder="you@example.com"
+            />
+          </div>
+          <div>
+            <label htmlFor="signin-password" className="block text-xs font-medium text-ia-navy mb-1">
+              Password
+            </label>
+            <input
+              id="signin-password"
+              type="password"
+              autoComplete="current-password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              disabled={submitting}
+              className={cn(
+                'w-full px-3 py-2 border border-ia-border rounded-md text-sm',
+                'focus:outline-none focus:ring-2 focus:ring-ia-teal',
+                'disabled:opacity-50',
+              )}
+            />
+          </div>
+
+          {error && (
+            <div
+              role="alert"
+              className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2"
+            >
+              {error}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            className={cn(
+              'w-full bg-ia-navy text-white text-sm font-medium py-2 rounded-md transition',
+              'hover:bg-ia-navy/90',
+              'disabled:opacity-50 disabled:cursor-not-allowed',
+            )}
+          >
+            {submitting ? 'Signing in…' : 'Sign in'}
+          </button>
+        </form>
+
+        <p className="mt-4 text-xs text-ia-muted text-center">
+          Need an account? Ask your admin to invite you via the Supabase dashboard
+          (Authentication → Users).
         </p>
       </div>
     </div>
