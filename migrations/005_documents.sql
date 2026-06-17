@@ -2,21 +2,23 @@
 -- Tables: documents (Drive metadata index, full-text searchable)
 -- Depends on: 001 (entities, locations, set_updated_at)
 
-CREATE TYPE document_category AS ENUM (
-  'financial',     -- P&L, BS, GL exports, bank/cc statements
-  'tax',           -- returns, K-1s, 1099s, sales tax filings
-  'legal',         -- entity formation, contracts, court docs
-  'contract',      -- client/vendor agreements, NDAs, MSAs
-  'payroll',       -- pay stubs, summaries, W-2s, W-4s
-  'hr',            -- I-9s, employee records, handbook, performance
-  'insurance',     -- policies, COIs, claims
-  'compliance',    -- license renewals, regulatory filings
-  'marketing',     -- brand assets, content, campaign plans
-  'operational',   -- SOPs, vendor info, equipment manuals
-  'real_estate',   -- leases, deeds, property records
-  'banking',       -- bank statements, reconciliations, deposit slips
-  'other'
-);
+DO $$ BEGIN
+  CREATE TYPE document_category AS ENUM (
+    'financial',     -- P&L, BS, GL exports, bank/cc statements
+    'tax',           -- returns, K-1s, 1099s, sales tax filings
+    'legal',         -- entity formation, contracts, court docs
+    'contract',      -- client/vendor agreements, NDAs, MSAs
+    'payroll',       -- pay stubs, summaries, W-2s, W-4s
+    'hr',            -- I-9s, employee records, handbook, performance
+    'insurance',     -- policies, COIs, claims
+    'compliance',    -- license renewals, regulatory filings
+    'marketing',     -- brand assets, content, campaign plans
+    'operational',   -- SOPs, vendor info, equipment manuals
+    'real_estate',   -- leases, deeds, property records
+    'banking',       -- bank statements, reconciliations, deposit slips
+    'other'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 CREATE TABLE IF NOT EXISTS public.documents (
   id                BIGSERIAL PRIMARY KEY,
@@ -40,12 +42,10 @@ CREATE TABLE IF NOT EXISTS public.documents (
   source_ingest_id  BIGINT,
   uploaded_by_email TEXT,
   is_archived       BOOLEAN NOT NULL DEFAULT FALSE,
-  search_vector     TSVECTOR GENERATED ALWAYS AS (
-                      setweight(to_tsvector('english', coalesce(file_name, '')), 'A') ||
-                      setweight(to_tsvector('english', coalesce(description, '')), 'B') ||
-                      setweight(to_tsvector('english', coalesce(content_text, '')), 'C') ||
-                      setweight(to_tsvector('english', coalesce(array_to_string(tags, ' '), '')), 'B')
-                    ) STORED,
+  -- search_vector populated by trigger documents_search_vector_update (see below).
+  -- Cannot be GENERATED ALWAYS AS (to_tsvector(...)) STORED because to_tsvector
+  -- is not marked IMMUTABLE on PG17 — generated-expression validation rejects it.
+  search_vector     TSVECTOR,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (drive_file_id)
@@ -58,6 +58,28 @@ CREATE INDEX IF NOT EXISTS idx_documents_search     ON public.documents USING GI
 CREATE INDEX IF NOT EXISTS idx_documents_period     ON public.documents (reporting_period DESC) WHERE reporting_period IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_documents_tax_year   ON public.documents (tax_year DESC) WHERE tax_year IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_documents_archived   ON public.documents (is_archived) WHERE is_archived = FALSE;
+
+-- search_vector maintenance trigger (replaces the original GENERATED column).
+-- Recomputes search_vector on any change to file_name / description / content_text / tags.
+CREATE OR REPLACE FUNCTION public.documents_search_vector_update()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.search_vector :=
+    setweight(to_tsvector('english', coalesce(NEW.file_name, '')), 'A') ||
+    setweight(to_tsvector('english', coalesce(NEW.description, '')), 'B') ||
+    setweight(to_tsvector('english', coalesce(NEW.content_text, '')), 'C') ||
+    setweight(to_tsvector('english', coalesce(array_to_string(NEW.tags, ' '), '')), 'B');
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_documents_search_vector ON public.documents;
+CREATE TRIGGER trg_documents_search_vector
+  BEFORE INSERT OR UPDATE OF file_name, description, content_text, tags
+  ON public.documents
+  FOR EACH ROW EXECUTE FUNCTION public.documents_search_vector_update();
 
 DROP TRIGGER IF EXISTS trg_documents_updated_at ON public.documents;
 CREATE TRIGGER trg_documents_updated_at
