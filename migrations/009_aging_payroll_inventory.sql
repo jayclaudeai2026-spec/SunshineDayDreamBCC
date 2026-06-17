@@ -96,9 +96,15 @@ CREATE TABLE IF NOT EXISTS public.inventory_snapshots (
   last_received_date DATE,
   source_ingest_id  BIGINT,
   source_file_path  TEXT,
-  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (entity_id, snapshot_date, COALESCE(sku, item_name))
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  -- Uniqueness over (entity_id, snapshot_date, COALESCE(sku, item_name)) is enforced
+  -- by the index below, not by a table-level UNIQUE constraint, because Postgres
+  -- does not allow expressions inside CREATE TABLE ... UNIQUE (...).
 );
+
+-- Functional unique index replacing the originally-attempted table UNIQUE constraint.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_inv_entity_date_item
+  ON public.inventory_snapshots (entity_id, snapshot_date, COALESCE(sku, item_name));
 
 CREATE INDEX IF NOT EXISTS idx_inv_entity   ON public.inventory_snapshots (entity_id);
 CREATE INDEX IF NOT EXISTS idx_inv_location ON public.inventory_snapshots (location_id);
