@@ -1,28 +1,11 @@
 // Parser for QuickBooks Desktop General Ledger exports.
-//
-// QBS GL export columns (typical):
-//   Date | Transaction Type | Num | Name | Memo | Account | Class | Debit | Credit | Balance
-//
-// We normalize to gl_entries_archive columns:
-//   transaction_date, period (YYYY-MM-01 derived from date),
-//   granularity ('yearly' | 'monthly'),
-//   account_name, account_code (if present), account_type (derived from name),
-//   description, memo, reference, debit, credit,
-//   vendor_customer (from "Name" column),
-//   source_file_path (filled by caller)
-//
-// granularity = 'yearly' when the source CSV spans 6+ distinct months
-// granularity = 'monthly' otherwise
-//
-// We do NOT skip "Balance" rows that QBS Desktop emits between transactions.
-// They have empty Date column — we skip rows with no parseable transaction_date.
 
 import { detectDateCell, isBlankRow, normalizeHeader, parseNumber } from "./csv.ts";
 
 export interface ParsedGLRow {
   entity_id: number;
-  transaction_date: string;       // YYYY-MM-DD
-  period: string;                 // YYYY-MM-01
+  transaction_date: string;
+  period: string;
   granularity: "monthly" | "yearly";
   account_code: string | null;
   account_name: string;
@@ -77,19 +60,13 @@ function findColumns(header: string[]): ColumnMap {
   };
 }
 
-/** QBS GL doesn't reliably emit account_type. Derive from account_name keywords. */
 function inferAccountType(name: string): string | null {
   const t = name.trim().toLowerCase();
   if (!t) return null;
-  // Assets
   if (/cash|checking|savings|receivable|inventory|prepaid|fixed asset|equipment|building|land/.test(t)) return "Asset";
-  // Liabilities
   if (/payable|accrued|deferred|loan|debt|mortgage|note payable/.test(t)) return "Liability";
-  // Equity
   if (/equity|capital|retained|distribution|owner's draw|owner draw|dividend/.test(t)) return "Equity";
-  // Revenue
   if (/^income|^revenue|^sales|service income|retail sales|fee income/.test(t)) return "Revenue";
-  // Expenses (catch-all)
   if (/expense|cost of goods|cogs|payroll|salaries|wages|rent|utilities|advertising|insurance|depreciation|interest|tax/.test(t)) return "Expense";
   return null;
 }
@@ -117,7 +94,6 @@ export function parseGL(args: {
     return { rows: [], warnings };
   }
 
-  // First pass to count months and produce parsed rows
   const months = new Set<string>();
   const parsed: ParsedGLRow[] = [];
 
@@ -125,7 +101,7 @@ export function parseGL(args: {
     const row = rows[i];
     if (!row || isBlankRow(row)) continue;
     const dateCell = (row[cols.date] ?? "").trim();
-    if (!dateCell) continue; // skip running-balance / non-transaction rows
+    if (!dateCell) continue;
     const txnDate = detectDateCell(dateCell);
     if (!txnDate) continue;
 
@@ -143,7 +119,7 @@ export function parseGL(args: {
       entity_id,
       transaction_date: txnDate,
       period,
-      granularity: "monthly", // tentative; finalize after we count months
+      granularity: "monthly",
       account_code: cols.account_code >= 0 ? ((row[cols.account_code] ?? "").trim() || null) : null,
       account_name: accountName,
       account_type: inferAccountType(accountName),

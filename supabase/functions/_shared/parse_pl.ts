@@ -1,37 +1,34 @@
 // Parser for QuickBooks Desktop P&L exports.
 //
-// Two shapes supported:
-//
-// 1. pl_yearly_columnar — "P&L by Month" export. One column per month + Total.
-//    Account names down the rows. We expand to 12 monthly_pl rows.
-//
-//      Account                | Jan 2026 | Feb 2026 | ... | Dec 2026 | Total
-//      Income                 |          |          |     |          |
-//        Service Income       |  10,000  |  11,000  | ... |   9,500  | ...
-//        Retail Sales         |   3,000  |   4,500  | ... |   3,200  | ...
-//        Total Income         |  13,000  |  15,500  | ... |  12,700  | ...
-//      Cost of Goods Sold     |          |          |     |          |
-//        ...
-//
-// 2. pl_monthly — single-period P&L. One amount column. One monthly_pl row.
-//
-// Parser rules (apply to both shapes):
-//   - Skip blank rows
-//   - Skip "Total ..." rows (avoids double-counting parent + leaf accounts)
-//   - Skip "Net Income" / "Gross Profit" rows (those are generated columns)
-//   - Classify each leaf account via classifyAccount() → P&L column
-//   - Sum into monthly_pl column for that month
-//   - Anything that doesn't classify cleanly lands in account_detail JSONB
+// 2026-06-17 v5 patch: label column found dynamically per row (label scan).
+// 2026-06-17 v6 patch: section-header / leaf-name collision guard + split
+//   "other income/expense" into three section variants.
+// 2026-06-17 v7 patch: subtotal-row skip + Other Expense section routing.
+//   Bug C: "Net Other Income" subtotal row was being captured as a leaf
+//     because it doesn't start with "Total" and its label tripped the income
+//     regex. Fix: isPLSubtotalRow() catches it before leaf processing.
+//   Bug D: items in QB "Other Expense" subsection were classified by name
+//     pattern (Management Fees -> other_opex via catch-all). Should route to
+//     other_expense column when section is other_expense, EXCEPT for accounts
+//     that match a more specific EBITDA-eligible bucket.
+// 2026-06-18 v8 patch: drop Math.abs(amt) on leaf values.
+//   Bug I: source CSVs from QB Desktop emit legitimately negative leaves
+//     (e.g. "Register Over and Short" = -26.14 when the till is short for
+//     the month, refunds in revenue lines, contra adjustments). The v6/v7
+//     parser applied Math.abs() universally before adding to column totals,
+//     so negative leaves INCREASED the bucket instead of decreasing it.
+//     Symptom: 2023 annual opex was $1,363.68 higher than source Total
+//     Expense, NI correspondingly lower. Fix: assign signed value as-is.
+//     QB Desktop's parent subtotals already reflect signed sums, so storing
+//     signed values keeps us aligned with source totals.
 
-import { isBlankRow, isTotalRow, parseNumber } from "./csv.ts";
+import { isBlankRow, parseNumber } from "./csv.ts";
 import type { MonthColumn } from "./csv.ts";
 import { classifyAccount, classifySection } from "./account_map.ts";
 import type { PLColumn, Section } from "./account_map.ts";
 
 export interface ParsedPLRow {
-  // The period this row applies to (YYYY-MM-01)
   period: string;
-  // Sums per P&L column
   revenue: number;
   other_income: number;
   cogs: number;
@@ -46,11 +43,11 @@ export interface ParsedPLRow {
   office_supplies: number;
   bank_fees: number;
   other_opex: number;
+  other_expense: number;
   depreciation: number;
   amortization: number;
   interest_expense: number;
   taxes: number;
-  // Per-account audit trail
   account_detail: Record<string, number>;
 }
 
@@ -67,107 +64,132 @@ function emptyRow(period: string): ParsedPLRow {
     payroll: 0, rent: 0, utilities: 0, marketing: 0,
     professional_fees: 0, insurance: 0, software_subscriptions: 0,
     travel_meals: 0, office_supplies: 0, bank_fees: 0, other_opex: 0,
+    other_expense: 0,
     depreciation: 0, amortization: 0, interest_expense: 0, taxes: 0,
     account_detail: {},
   };
 }
 
-/** Section detection: QBS exports often have un-amounted section header rows
- *  like "Income" or "Cost of Goods Sold" or "Expenses" that scope the rows
- *  below them. Returns updated section if this row is a section header,
- *  otherwise null. */
 function detectSectionHeader(label: string): Section | null {
   const t = label.trim().toLowerCase();
   if (t === "income" || t === "revenue" || t === "ordinary income/expense") return "income";
   if (t === "cost of goods sold" || t === "cogs") return "cogs";
   if (t === "expense" || t === "expenses" || t === "operating expenses") return "expense";
-  if (t === "other income/expense" || t === "other income" || t === "other expense") return "other";
+  if (t === "other income/expense") return "other";
+  if (t === "other income") return "other_income";
+  if (t === "other expense") return "other_expense";
   return null;
 }
 
-/**
- * Parse a yearly columnar P&L into 12 monthly rows.
- * Returns ParsedPLRow per detected month column.
- */
+function isPLSubtotalRow(label: string): boolean {
+  const t = label.trim().toLowerCase();
+  if (/^total\b/.test(t)) return true;
+  if (t === "net income") return true;
+  if (t === "gross profit") return true;
+  if (t === "net ordinary income") return true;
+  if (t === "net other income") return true;
+  if (t === "net other expense") return true;
+  return false;
+}
+
+const KEEP_EBITDA_ELIGIBLE: ReadonlySet<PLColumn> = new Set([
+  "interest_expense",
+  "depreciation",
+  "amortization",
+  "taxes",
+  "cogs",
+]);
+
+function findRowLabel(row: string[], labelCol: number, firstDataCol: number): string {
+  const maxLabelCol = Math.min(firstDataCol, row.length);
+  for (let c = labelCol; c < maxLabelCol; c++) {
+    const cell = (row[c] ?? "").trim();
+    if (cell !== "") return cell;
+  }
+  return "";
+}
+
 export function parsePLYearlyColumnar(args: {
   rows: string[][];
   headerRowIndex: number;
   monthColumns: MonthColumn[];
-  labelColumnIndex?: number; // defaults to 0
+  labelColumnIndex?: number;
 }): ParsedPLOutput {
   const { rows, headerRowIndex, monthColumns } = args;
   const labelCol = args.labelColumnIndex ?? 0;
   const warnings: string[] = [];
   const unmapped = new Set<string>();
 
-  // One ParsedPLRow per month column, in order
+  const firstMonthIdx = monthColumns.length > 0
+    ? Math.min(...monthColumns.map((mc) => mc.index))
+    : Number.MAX_SAFE_INTEGER;
+
   const periodRows: ParsedPLRow[] = monthColumns.map((mc) => emptyRow(mc.period));
   const periodByCol = new Map<number, ParsedPLRow>();
   monthColumns.forEach((mc, i) => periodByCol.set(mc.index, periodRows[i]));
 
-  // Track current section as we walk down
-  let section: Section = "expense"; // safe default
+  let section: Section = "expense";
 
   for (let i = headerRowIndex + 1; i < rows.length; i++) {
     const row = rows[i];
     if (!row || isBlankRow(row)) continue;
 
-    const label = (row[labelCol] ?? "").trim();
+    const label = findRowLabel(row, labelCol, firstMonthIdx);
     if (!label) continue;
 
-    // Section header? Update section and skip to next row.
     const newSection = detectSectionHeader(label);
     if (newSection) {
-      section = newSection;
-      continue;
+      let hasData = false;
+      for (const mc of monthColumns) {
+        if (parseNumber(row[mc.index] ?? "") !== 0) { hasData = true; break; }
+      }
+      if (!hasData) {
+        section = newSection;
+        continue;
+      }
     }
 
-    // Skip "Total ..." rows
-    if (isTotalRow(label)) continue;
+    if (isPLSubtotalRow(label)) continue;
 
-    // Classify this leaf account
     const explicitColumn = classifyAccount(label);
-    // Resolve final column based on section AND classifier:
-    //   - If we're in "income" section and classifier said expense, override to other_income/revenue
-    //   - If we're in "cogs" section, force cogs regardless
-    //   - If we're in "other" section (below-the-line), trust the classifier
     let column: PLColumn = explicitColumn;
     if (section === "cogs") {
       column = "cogs";
     } else if (section === "income") {
       if (explicitColumn !== "revenue" && explicitColumn !== "other_income") {
-        // Section says income; classifier didn't catch it. Default to revenue.
         column = label.toLowerCase().includes("other")
           ? "other_income"
           : "revenue";
       }
+    } else if (section === "other_income") {
+      column = "other_income";
+    } else if (section === "other_expense") {
+      if (!KEEP_EBITDA_ELIGIBLE.has(explicitColumn)) {
+        column = "other_expense";
+      }
     }
-    // For expense / other sections, keep the classifier's column.
 
-    // Mark as unmapped for visibility if we fell through to other_opex
     if (column === "other_opex" && classifySection(label) === "expense") {
       unmapped.add(label);
     }
 
-    // Sum into each month's column
     for (const mc of monthColumns) {
       const cell = (row[mc.index] ?? "");
       const amt = parseNumber(cell);
       if (amt === 0) continue;
       const periodRow = periodByCol.get(mc.index)!;
-      // P&L is "magnitude-positive" convention: revenue and expenses both stored
-      // as positive numbers. Section determines the sign in the generated
-      // columns (revenue + other_income - cogs - opex - ...).
-      const value = Math.abs(amt);
+      // v8 Bug I fix: store signed value, not absolute. Negative leaves
+      // (Register Over and Short shorts, refunds, contra adjustments)
+      // must REDUCE their column totals to stay aligned with source
+      // CSV's signed subtotals.
+      const value = amt;
       (periodRow[column] as number) += value;
-      // Detail audit trail
       const key = `${label}|${column}`;
       periodRow.account_detail[key] =
         (periodRow.account_detail[key] ?? 0) + value;
     }
   }
 
-  // Warn about months with zero activity (possibly indicates a parse miss)
   for (const pr of periodRows) {
     const total = pr.revenue + pr.cogs + pr.payroll + pr.other_opex;
     if (total === 0) warnings.push(`Period ${pr.period} has zero total activity`);
@@ -180,13 +202,6 @@ export function parsePLYearlyColumnar(args: {
   };
 }
 
-/**
- * Parse a single-period P&L. Returns a single ParsedPLRow.
- * Caller supplies the period (typically from ingest_log.reporting_period).
- *
- * Assumes the value column is the FIRST numeric column to the right of the
- * label. Caller can override via amountColumnIndex.
- */
 export function parsePLMonthly(args: {
   rows: string[][];
   headerRowIndex: number;
@@ -199,8 +214,6 @@ export function parsePLMonthly(args: {
   const warnings: string[] = [];
   const unmapped = new Set<string>();
 
-  // Auto-detect amount column if not supplied: first column with non-empty
-  // numeric values in the first few data rows.
   let amountCol = args.amountColumnIndex ?? -1;
   if (amountCol < 0) {
     const header = rows[headerRowIndex] ?? [];
@@ -224,32 +237,44 @@ export function parsePLMonthly(args: {
   for (let i = headerRowIndex + 1; i < rows.length; i++) {
     const row = rows[i];
     if (!row || isBlankRow(row)) continue;
-    const label = (row[labelCol] ?? "").trim();
+
+    const label = findRowLabel(row, labelCol, amountCol);
     if (!label) continue;
 
     const newSection = detectSectionHeader(label);
     if (newSection) {
-      section = newSection;
-      continue;
+      const hasData = parseNumber(row[amountCol] ?? "") !== 0;
+      if (!hasData) {
+        section = newSection;
+        continue;
+      }
     }
-    if (isTotalRow(label)) continue;
+    if (isPLSubtotalRow(label)) continue;
 
     const cell = row[amountCol] ?? "";
     const amt = parseNumber(cell);
     if (amt === 0) continue;
 
-    let column: PLColumn = classifyAccount(label);
+    const explicitColumn = classifyAccount(label);
+    let column: PLColumn = explicitColumn;
     if (section === "cogs") column = "cogs";
     else if (section === "income") {
       if (column !== "revenue" && column !== "other_income") {
         column = label.toLowerCase().includes("other") ? "other_income" : "revenue";
+      }
+    } else if (section === "other_income") {
+      column = "other_income";
+    } else if (section === "other_expense") {
+      if (!KEEP_EBITDA_ELIGIBLE.has(explicitColumn)) {
+        column = "other_expense";
       }
     }
     if (column === "other_opex" && classifySection(label) === "expense") {
       unmapped.add(label);
     }
 
-    const value = Math.abs(amt);
+    // v8 Bug I fix: signed value.
+    const value = amt;
     (periodRow[column] as number) += value;
     const key = `${label}|${column}`;
     periodRow.account_detail[key] = (periodRow.account_detail[key] ?? 0) + value;

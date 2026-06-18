@@ -1,14 +1,10 @@
 // Detect the report type of a parsed CSV by inspecting its headers and shape.
 //
-// QBS Desktop exports have recognizable signatures:
-//   - P&L yearly columnar: first column = account names, header row has 12 month columns + Total
-//   - P&L monthly:         first column = account names, header has 1 amount column
-//   - Balance Sheet:       first column = account names, header has 1+ period_end date columns
-//   - General Ledger:      header includes "Date", "Account", "Debit", "Credit"
-//   - A/R Aging:           header includes "Current", "1-30", "31-60", "61-90", ">90"
-//   - A/P Aging:           same as A/R but for vendors
-//   - Payroll Summary:     header includes "Employee", "Gross Pay", "Net Pay"
-//   - Inventory:           header includes "SKU" / "Item" + "Qty on Hand"
+// 2026-06-17 patch: lowered pl_yearly_columnar threshold from >= 6 month
+// columns to >= 1 so Q1/quarterly P&L exports (3 month columns) classify
+// correctly. detectMonthColumns is strict enough (anchors ^...$ around
+// month+year format) that BS files with date-cell headers like "Jan 31, 23"
+// still route to bs_columnar (which uses detectDateCell).
 
 import { detectDateCell, detectMonthColumns, normalizeHeader } from "./csv.ts";
 
@@ -27,16 +23,11 @@ export type ReportType =
 
 export interface ReportTypeDetection {
   type: ReportType;
-  confidence: number;       // 0.0 - 1.0
-  header_row_index: number; // which row is the actual header (after metadata)
+  confidence: number;
+  header_row_index: number;
   notes: string[];
 }
 
-/**
- * Find the row in the first ~10 rows that looks most like a header row.
- * QBS exports often start with 1-3 metadata rows (company name, report title,
- * date range) before the actual column headers.
- */
 function findHeaderRow(rows: string[][]): number {
   const scanLimit = Math.min(10, rows.length);
   let bestIdx = 0;
@@ -44,7 +35,6 @@ function findHeaderRow(rows: string[][]): number {
   for (let i = 0; i < scanLimit; i++) {
     const row = rows[i] ?? [];
     const nonEmpty = row.filter((c) => (c ?? "").trim() !== "").length;
-    // Heuristic: a header row has multiple non-empty columns AND non-numeric values.
     const numericCells = row.filter((c) => /^\(?[\d,\.\-$]+\)?$/.test((c ?? "").trim())).length;
     if (nonEmpty >= 2 && numericCells === 0) {
       const score = nonEmpty;
@@ -74,7 +64,6 @@ export function detectReportType(rows: string[][]): ReportTypeDetection {
   const normalizedHeader = header.map(normalizeHeader);
   notes.push(`Header row at index ${headerIdx}: ${header.slice(0, 8).join(" | ")}`);
 
-  // ---- GL: header has Date + Account + Debit + Credit ----
   const hasDate = normalizedHeader.some((h) => h.includes("date") && !h.includes("due"));
   const hasAccount = normalizedHeader.some((h) =>
     h.includes("account") || h === "split" || h.includes("account_name")
@@ -82,7 +71,6 @@ export function detectReportType(rows: string[][]): ReportTypeDetection {
   const hasDebit = normalizedHeader.some((h) => h === "debit" || h.endsWith("_debit"));
   const hasCredit = normalizedHeader.some((h) => h === "credit" || h.endsWith("_credit"));
   if (hasDate && hasAccount && (hasDebit || hasCredit)) {
-    // yearly vs monthly: count distinct months in data
     const monthsSeen = new Set<string>();
     const dateIdx = normalizedHeader.findIndex((h) => h.includes("date") && !h.includes("due"));
     for (let i = headerIdx + 1; i < Math.min(rows.length, headerIdx + 500); i++) {
@@ -94,7 +82,6 @@ export function detectReportType(rows: string[][]): ReportTypeDetection {
     return { type, confidence: 0.95, header_row_index: headerIdx, notes };
   }
 
-  // ---- A/R or A/P aging: header has bucket columns ----
   const agingBuckets = ["current", "1_30", "31_60", "61_90", "1-30", "31-60", "61-90"];
   const agingMatches = normalizedHeader.filter((h) =>
     agingBuckets.some((b) => h.includes(b))
@@ -108,7 +95,6 @@ export function detectReportType(rows: string[][]): ReportTypeDetection {
     return { type, confidence: 0.85, header_row_index: headerIdx, notes };
   }
 
-  // ---- Payroll Summary ----
   const hasEmployee = normalizedHeader.some((h) => h.includes("employee"));
   const hasPay = normalizedHeader.some((h) =>
     h.includes("gross_pay") || h.includes("net_pay") || h.includes("total_pay")
@@ -118,7 +104,6 @@ export function detectReportType(rows: string[][]): ReportTypeDetection {
     return { type: "payroll_summary", confidence: 0.8, header_row_index: headerIdx, notes };
   }
 
-  // ---- Inventory Snapshot ----
   const hasItem = normalizedHeader.some((h) =>
     h === "item" || h.includes("sku") || h.includes("item_name") || h.includes("product")
   );
@@ -130,37 +115,26 @@ export function detectReportType(rows: string[][]): ReportTypeDetection {
     return { type: "inventory_snapshot", confidence: 0.8, header_row_index: headerIdx, notes };
   }
 
-  // ---- P&L vs BS ----
-  // Both have account-name first column. Distinguish by:
-  //   - P&L yearly: 12 month columns
-  //   - P&L monthly: 1 amount column (no period dates)
-  //   - BS monthly: 1 date column (period_end)
-  //   - BS columnar: multiple date columns (period_end trend)
-
   const monthCols = detectMonthColumns(header);
-  if (monthCols.length >= 6) {
-    notes.push(`Detected ${monthCols.length} month columns → pl_yearly_columnar`);
+  if (monthCols.length >= 1) {
+    notes.push(`Detected ${monthCols.length} month columns \u2192 pl_yearly_columnar`);
     return {
       type: "pl_yearly_columnar",
-      confidence: 0.9,
+      confidence: monthCols.length >= 6 ? 0.9 : 0.75,
       header_row_index: headerIdx,
       notes,
     };
   }
 
-  // Look for date-shaped cells in header (BS columnar)
   let dateCols = 0;
   for (const cell of header) {
     if (detectDateCell(cell)) dateCols++;
   }
   if (dateCols >= 2) {
-    notes.push(`Detected ${dateCols} date columns → bs_columnar`);
+    notes.push(`Detected ${dateCols} date columns \u2192 bs_columnar`);
     return { type: "bs_columnar", confidence: 0.85, header_row_index: headerIdx, notes };
   }
 
-  // Heuristic: look at the first column of data rows to see if it looks like
-  // account names (text + indentation), and check the title row (above header)
-  // for "Profit" / "Balance Sheet" / "Income" hints.
   const titleHint = (rows.slice(0, headerIdx).map((r) => r.join(" ").toLowerCase())).join(" ");
 
   if (titleHint.includes("balance sheet") || titleHint.includes("statement of financial")) {
