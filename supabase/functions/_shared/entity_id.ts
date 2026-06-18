@@ -1,4 +1,4 @@
-// 5-layer entity identification. Never rejects — manual_queue is the fallback.
+// v8 (2026-06-18): entity identification expanded — unchanged in v9.
 
 import type { SupabaseClient } from "./supabase.ts";
 import type {
@@ -6,6 +6,32 @@ import type {
   EntityRow,
   ExtractedAttachment,
 } from "./types.ts";
+
+function normalize(s: string): string {
+  return (s ?? "").toLowerCase().replace(/[\s\-_.]/g, "");
+}
+
+interface Candidate {
+  entity_id: number;
+  term: string;
+  source: "legal_name" | "entity_short_name";
+}
+
+function buildCandidates(entities: EntityRow[]): Candidate[] {
+  const cands: Candidate[] = [];
+  for (const e of entities) {
+    const short = normalize(e.entity_short_name ?? "");
+    const legal = normalize(e.legal_name ?? "");
+    if (legal && legal.length >= 6) {
+      cands.push({ entity_id: e.id, term: legal, source: "legal_name" });
+    }
+    if (short && short.length >= 4) {
+      cands.push({ entity_id: e.id, term: short, source: "entity_short_name" });
+    }
+  }
+  cands.sort((a, b) => b.term.length - a.term.length);
+  return cands;
+}
 
 export async function identifyEntity(args: {
   sb: SupabaseClient;
@@ -25,14 +51,13 @@ export async function identifyEntity(args: {
   }
 
   const entities: EntityRow[] = (entitiesRaw ?? []) as EntityRow[];
+  const candidates = buildCandidates(entities);
 
-  // ===== Layer 1: subject_bracket =====
-  // [ENTITY_SHORT_NAME] or [entity_short_name] in subject.
   const bracketMatch = subject.match(/\[([^\]]+)\]/);
   if (bracketMatch) {
     const candidate = bracketMatch[1].trim().toLowerCase();
     const hit = entities.find(
-      (e) => e.entity_short_name.toLowerCase() === candidate,
+      (e) => (e.entity_short_name ?? "").toLowerCase() === candidate,
     );
     if (hit) {
       return {
@@ -43,36 +68,31 @@ export async function identifyEntity(args: {
     }
   }
 
-  // ===== Layer 2: filename_pattern =====
-  // entity_short_name appears as a delimited token in any attachment filename.
   for (const att of attachments) {
-    const fname = att.filename.toLowerCase();
-    const hit = entities.find((e) => {
-      const s = e.entity_short_name.toLowerCase();
-      const re = new RegExp(
-        `(^|[\\s_\\-\\.])${escapeRegex(s)}([\\s_\\-\\.]|$)`,
-      );
-      return re.test(fname);
-    });
+    const normFname = normalize(att.filename);
+    if (!normFname) continue;
+    const hit = candidates.find((c) => normFname.includes(c.term));
     if (hit) {
       return {
-        entity_id: hit.id,
+        entity_id: hit.entity_id,
         method: "filename_pattern",
         confidence: 0.95,
       };
     }
   }
 
-  // ===== Layer 3: csv_content =====
-  // DEFERRED to v1.1. Inspecting CSV content here would require downloading
-  // each candidate attachment via GMAIL_GET_ATTACHMENT before entity ID is
-  // known — duplicating work the parser (Step 3) will already do. The cleaner
-  // path is to wire content-based ID into the parser pipeline and have it
-  // update ingest_log.entity_identification_method='csv_content' retroactively
-  // when sender_map + manual_queue would otherwise have been the result.
-  // For v1, we fall through to layers 4 and 5.
+  if (subject) {
+    const normSubject = normalize(subject);
+    const hit = candidates.find((c) => normSubject.includes(c.term));
+    if (hit) {
+      return {
+        entity_id: hit.entity_id,
+        method: "subject_pattern",
+        confidence: 0.85,
+      };
+    }
+  }
 
-  // ===== Layer 4: sender_map =====
   if (from_email) {
     const { data: mapRow } = await sb
       .from("email_sender_map")
@@ -85,15 +105,10 @@ export async function identifyEntity(args: {
       return {
         entity_id: mapRow.entity_id,
         method: "sender_map",
-        confidence: 0.85,
+        confidence: 0.80,
       };
     }
   }
 
-  // ===== Layer 5: manual_queue =====
   return { entity_id: null, method: "manual_queue", confidence: 0.0 };
-}
-
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

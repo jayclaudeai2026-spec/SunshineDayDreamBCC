@@ -1,26 +1,43 @@
-// Gmail helpers: header lookup, address parsing, MIME walk, and Composio wrappers.
+// Gmail helpers v7 (2026-06-18) — unchanged in v9.
 
 import type { ComposioClient } from "./composio.ts";
 import type { ExtractedAttachment, GmailMessage, GmailPart } from "./types.ts";
 
 export function findHeader(msg: GmailMessage, name: string): string | null {
-  const headers = msg.payload?.headers ?? [];
+  const headers = (msg as unknown as { payload?: { headers?: Array<{ name: string; value: string }> } })
+    .payload?.headers ?? [];
   const lower = name.toLowerCase();
-  const found = headers.find((h) => h.name.toLowerCase() === lower);
+  const found = headers.find((h) => (h?.name ?? "").toLowerCase() === lower);
   return found?.value ?? null;
 }
 
-/** "Name <email@example.com>" or "email@example.com" → "email@example.com" (lowercased). */
 export function parseEmailAddress(raw: string | null): string | null {
   if (!raw) return null;
   const angled = raw.match(/<([^>]+)>/);
   const candidate = (angled ? angled[1] : raw).trim().toLowerCase();
-  // Reject anything that doesn't look at all like an email
   return /^[^\s@]+@[^\s@]+$/.test(candidate) ? candidate : null;
 }
 
-/** Walks MIME tree collecting (filename, attachment_id, mime_type) tuples. */
 export function extractAttachments(msg: GmailMessage): ExtractedAttachment[] {
+  const flat = (msg as unknown as {
+    attachmentList?: Array<{ attachmentId?: string; filename?: string; mimeType?: string }>;
+  }).attachmentList;
+  if (Array.isArray(flat) && flat.length > 0) {
+    const out: ExtractedAttachment[] = [];
+    for (const a of flat) {
+      const aid = a?.attachmentId;
+      const fname = (a?.filename ?? "").trim();
+      if (aid && fname) {
+        out.push({
+          filename: fname,
+          attachment_id: aid,
+          mime_type: a?.mimeType ?? "application/octet-stream",
+        });
+      }
+    }
+    if (out.length > 0) return out;
+  }
+
   const out: ExtractedAttachment[] = [];
   const visit = (part: GmailPart | undefined) => {
     if (!part) return;
@@ -39,16 +56,20 @@ export function extractAttachments(msg: GmailMessage): ExtractedAttachment[] {
   return out;
 }
 
-/** CSV filter by MIME or filename suffix. Tolerant of vendor quirks. */
 export function filterCsv(atts: ExtractedAttachment[]): ExtractedAttachment[] {
   return atts.filter((a) => {
-    const mime = a.mime_type.toLowerCase();
-    const name = a.filename.toLowerCase();
+    const mime = (a.mime_type || "").toLowerCase();
+    const name = (a.filename || "").toLowerCase();
     return (
       mime.startsWith("text/csv") ||
       mime === "application/csv" ||
-      mime === "application/vnd.ms-excel" || // some clients emit this for .csv
-      name.endsWith(".csv")
+      mime === "application/vnd.ms-excel" ||
+      mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+      mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.template" ||
+      name.endsWith(".csv") ||
+      name.endsWith(".xlsx") ||
+      name.endsWith(".xls") ||
+      name.endsWith(".xlsm")
     );
   });
 }
@@ -61,13 +82,29 @@ export async function fetchMessage(
     "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID",
     { message_id, format: "full", user_id: "me" },
   );
-  const r = unwrap(resp) as Partial<GmailMessage>;
-  if (!r?.id) {
+  const r = unwrap(resp) as Record<string, unknown>;
+
+  const idVal = (r?.id as string | undefined) ??
+    (r?.messageId as string | undefined) ??
+    message_id;
+
+  const tidVal = (r?.threadId as string | undefined) ??
+    (r?.thread_id as string | undefined) ?? "";
+
+  if (!idVal) {
     throw new Error(
-      `fetchMessage: empty payload for message_id=${message_id}`,
+      `fetchMessage: empty payload for message_id=${message_id}, keys=${
+        Object.keys(r ?? {}).join(",")
+      }`,
     );
   }
-  return r as GmailMessage;
+
+  return {
+    id: idVal,
+    threadId: tidVal,
+    payload: r?.payload as GmailPart | undefined,
+    attachmentList: r?.attachmentList,
+  } as unknown as GmailMessage;
 }
 
 export interface AttachmentDownload {
@@ -103,12 +140,73 @@ export async function getAttachmentS3Key(
   return { s3key, mime_type };
 }
 
+export interface InboxFetchResult {
+  message_ids: string[];
+  pages_walked: number;
+  query: string;
+}
+
+export async function fetchInboxMessageIdsSince(
+  composio: ComposioClient,
+  args: { since_date: string; max_total?: number; per_page?: number; extra_query?: string },
+): Promise<InboxFetchResult> {
+  const perPage = Math.min(args.per_page ?? 500, 500);
+  const maxTotal = args.max_total ?? 1000;
+  const baseQuery = `after:${args.since_date} label:INBOX${args.extra_query ? " " + args.extra_query : ""}`;
+
+  const ids = new Set<string>();
+  let pageToken: string | null = null;
+  let pagesWalked = 0;
+
+  do {
+    const callArgs: Record<string, unknown> = {
+      query: baseQuery,
+      ids_only: true,
+      max_results: perPage,
+      user_id: "me",
+      include_payload: false,
+    };
+    if (pageToken) callArgs.page_token = pageToken;
+
+    const resp = await composio.execute<unknown>("GMAIL_FETCH_EMAILS", callArgs);
+    const r = unwrap(resp) as Record<string, unknown>;
+    pagesWalked++;
+
+    const messages =
+      (r?.messages as Array<Record<string, unknown>> | undefined) ??
+      ((r?.data as Record<string, unknown> | undefined)?.messages as Array<Record<string, unknown>> | undefined) ??
+      [];
+
+    for (const m of messages) {
+      const id = (m?.id as string | undefined) ??
+        (m?.messageId as string | undefined) ??
+        (m?.message_id as string | undefined);
+      if (id) ids.add(id);
+      if (ids.size >= maxTotal) break;
+    }
+
+    const nextRaw =
+      (r?.nextPageToken as string | undefined) ??
+      (r?.next_page_token as string | undefined) ??
+      ((r?.data as Record<string, unknown> | undefined)?.nextPageToken as string | undefined);
+    pageToken = nextRaw && nextRaw.length > 0 ? nextRaw : null;
+
+    if (ids.size >= maxTotal) break;
+    if (pagesWalked >= 10) break;
+  } while (pageToken);
+
+  return {
+    message_ids: Array.from(ids),
+    pages_walked: pagesWalked,
+    query: baseQuery,
+  };
+}
+
 export interface HistoryFetchResult {
   message_ids: string[];
   new_history_id: string | null;
 }
 
-/** Returns new message IDs since startHistoryId. Caller advances checkpoint. */
 export async function listHistoryMessageIds(
   composio: ComposioClient,
   args: {
@@ -147,11 +245,25 @@ export async function getProfileHistoryId(
   const resp = await composio.execute<unknown>("GMAIL_GET_PROFILE", {
     user_id: "me",
   });
-  const r = unwrap(resp) as Record<string, unknown>;
-  return (r?.historyId as string | undefined) ?? null;
+  return deepFindString(resp, "historyId");
 }
 
-/** Composio sometimes wraps tool output one extra level. Unwrap defensively. */
+function deepFindString(obj: unknown, key: string, depth = 0): string | null {
+  if (depth > 4) return null;
+  if (!obj || typeof obj !== "object") return null;
+  const rec = obj as Record<string, unknown>;
+  const direct = rec[key];
+  if (typeof direct === "string" && direct.length > 0) return direct;
+  if (typeof direct === "number") return String(direct);
+  for (const v of Object.values(rec)) {
+    if (v && typeof v === "object") {
+      const found = deepFindString(v, key, depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 function unwrap(resp: unknown): unknown {
   if (resp && typeof resp === "object" && "data" in resp) {
     const inner = (resp as Record<string, unknown>).data;

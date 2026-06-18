@@ -1,24 +1,10 @@
-// Single-message pipeline: the core work of email-ingest.
-//
-// Spec (from 2026-06-15 handoff briefing, session_note ad66d517):
-//   1. Idempotency: dedupe on gmail_message_id
-//   2. Fetch full Gmail message
-//   3. Extract attachments, filter CSVs
-//   4. 5-layer entity identification (never reject; manual_queue fallback)
-//   5. Parse reporting period from subject/filename
-//   6. Archive CSVs to Google Drive at <bcc_root>/<entity_short>/<YYYY>/<MM>/
-//   7. INSERT ingest_log
-//   8. Send ingest_receipt to bookkeeper (draft → verify → send)
-//   9. Leave parse_result='pending' for parser (Step 3) to pick up
-//
-// Critical principles:
-//   - NEVER fail silently
-//   - NEVER roll back ingest_log if downstream fails — the row is the durable record
-//   - Drive archive failure → log, continue with empty drive_file_ids
-//   - Receipt send failure → log to email_send_log status='failed', return success
+// process_message v8 (2026-06-18):
+//   - v7: receipt sending gated by sendReceipts flag (default false).
+//   - v8: only pass ingestable (CSV/XLSX/XLS) attachments to identifyEntity. No fallback to allAttachments — prevents inline signature images from triggering false-positive filename_pattern matches.
+//   - v9: no changes to this file; period parsing now handles MM/DD/YYYY (see _shared/template.ts).
 
-import type { SupabaseClient } from "../_shared/supabase.ts";
-import { ComposioClient, ComposioError } from "../_shared/composio.ts";
+import type { SupabaseClient } from "./_shared/supabase.ts";
+import { ComposioClient, ComposioError } from "./_shared/composio.ts";
 import {
   extractAttachments,
   fetchMessage,
@@ -26,28 +12,28 @@ import {
   findHeader,
   getAttachmentS3Key,
   parseEmailAddress,
-} from "../_shared/gmail.ts";
+} from "./_shared/gmail.ts";
 import {
   resolveOrCreateFolder,
   uploadFileToFolder,
-} from "../_shared/drive.ts";
-import { identifyEntity } from "../_shared/entity_id.ts";
+} from "./_shared/drive.ts";
+import { identifyEntity } from "./_shared/entity_id.ts";
 import {
   escapeHtml,
   parseReportingPeriod,
   periodLabel,
   renderTemplate,
-} from "../_shared/template.ts";
-import type { IngestPipelineResult } from "../_shared/types.ts";
+} from "./_shared/template.ts";
+import type { IngestPipelineResult } from "./_shared/types.ts";
 
 export async function processMessage(args: {
   sb: SupabaseClient;
   composio: ComposioClient;
   message_id: string;
+  sendReceipts?: boolean;
 }): Promise<IngestPipelineResult> {
-  const { sb, composio, message_id } = args;
+  const { sb, composio, message_id, sendReceipts = false } = args;
 
-  // ===== 1. Idempotency =====
   const { data: existing } = await sb
     .from("ingest_log")
     .select("id, entity_id")
@@ -63,31 +49,25 @@ export async function processMessage(args: {
     };
   }
 
-  // ===== 2. Fetch full message =====
   const msg = await fetchMessage(composio, message_id);
 
   const fromEmail = parseEmailAddress(findHeader(msg, "From")) ?? "unknown";
   const toEmail = parseEmailAddress(findHeader(msg, "To")) ?? "unknown";
   const subject = findHeader(msg, "Subject") ?? "";
 
-  // ===== 3. Extract attachments, filter CSVs =====
   const allAttachments = extractAttachments(msg);
   const csvs = filterCsv(allAttachments);
 
-  // ===== 4. Entity identification =====
-  // Use CSVs for filename layer if present, else fall back to all attachment names
   const ident = await identifyEntity({
     sb,
     subject,
     from_email: fromEmail,
-    attachments: csvs.length > 0 ? csvs : allAttachments,
+    attachments: csvs,
   });
 
-  // ===== 5. Reporting period =====
   const filenameStrings = csvs.map((a) => a.filename);
   const reportingPeriod = parseReportingPeriod([subject, ...filenameStrings]);
 
-  // ===== 6. Drive archive =====
   let driveFolderId: string | null = null;
   const driveFileIds: string[] = [];
   let driveError: string | null = null;
@@ -108,10 +88,9 @@ export async function processMessage(args: {
 
       if (!bccRoot) {
         driveError =
-          "No bcc_root in client_context.drive_folder_mappings — Drive archive skipped";
+          "No bcc_root in client_context.drive_folder_mappings \u2014 Drive archive skipped";
         console.warn(driveError);
       } else {
-        // Resolve entity_short_name for the path segment
         let entityShort = "_unidentified";
         if (ident.entity_id) {
           const { data: e } = await sb
@@ -157,11 +136,9 @@ export async function processMessage(args: {
       const m = err instanceof Error ? err.message : String(err);
       driveError = m;
       console.error(`Drive archive failed for ${message_id}: ${m}`);
-      // intentional: continue to write the ingest_log row regardless
     }
   }
 
-  // ===== 7. Insert ingest_log =====
   const parseResult = ident.method === "manual_queue"
     ? "manual_queue_required"
     : "pending";
@@ -169,8 +146,8 @@ export async function processMessage(args: {
   const errorDetails: Record<string, unknown> = {};
   if (driveError) errorDetails.drive_archive_error = driveError;
   if (csvs.length === 0 && allAttachments.length > 0) {
-    errorDetails.no_csv_attachments = true;
-    errorDetails.non_csv_attachment_count = allAttachments.length;
+    errorDetails.no_ingestable_attachments = true;
+    errorDetails.non_ingestable_attachment_count = allAttachments.length;
   }
   if (csvs.length === 0 && allAttachments.length === 0) {
     errorDetails.no_attachments = true;
@@ -207,30 +184,25 @@ export async function processMessage(args: {
 
   const ingestId = inserted.id as number;
 
-  // ===== 8. Send ingest_receipt (best-effort) =====
-  try {
-    await sendReceipt({
-      sb,
-      composio,
-      ingestId,
-      msg,
-      fromEmail,
-      entity_id: ident.entity_id,
-      reportingPeriod,
-      attachmentNames: csvs.map((a) => a.filename),
-    });
-  } catch (err) {
-    const m = err instanceof Error ? err.message : String(err);
-    console.error(
-      `Receipt send failed for ingest_id=${ingestId}: ${m}`,
-    );
-    // already logged to email_send_log inside sendReceipt
+  if (sendReceipts) {
+    try {
+      await sendReceipt({
+        sb,
+        composio,
+        ingestId,
+        msg,
+        fromEmail,
+        entity_id: ident.entity_id,
+        reportingPeriod,
+        attachmentNames: csvs.map((a) => a.filename),
+      });
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      console.error(
+        `Receipt send failed for ingest_id=${ingestId}: ${m}`,
+      );
+    }
   }
-
-  // ===== 9. Parser dispatch (Step 3 TODO) =====
-  // For v1: leave parse_result='pending' for non-manual cases. The parser
-  // Edge Function (Step 3, to be built) will sweep pending rows on its own
-  // cron schedule. Direct dispatch can be wired here once the parser exists.
 
   return {
     status: ident.method === "manual_queue" ? "manual_queue" : "success",
@@ -239,10 +211,6 @@ export async function processMessage(args: {
     entity_id: ident.entity_id,
   };
 }
-
-// ----------------------------------------------------------------------------
-// Receipt: draft → verify → send via Composio Gmail
-// ----------------------------------------------------------------------------
 
 async function sendReceipt(args: {
   sb: SupabaseClient;
@@ -280,8 +248,7 @@ async function sendReceipt(args: {
     );
   }
 
-  // Resolve entity display
-  let entityDisplay = "Unidentified — manual review";
+  let entityDisplay = "Unidentified \u2014 manual review";
   if (entity_id) {
     const { data: e } = await sb
       .from("entities")
@@ -316,7 +283,6 @@ async function sendReceipt(args: {
     ? renderTemplate(tpl.text_body_template as string, vars)
     : null;
 
-  // Intake email for audit-only "from"
   const { data: cc } = await sb
     .from("client_context")
     .select("intake_email")
@@ -324,7 +290,6 @@ async function sendReceipt(args: {
     .maybeSingle();
   const intakeEmail = (cc?.intake_email as string | undefined) ?? "unknown";
 
-  // Pre-send row
   const { data: sendRow, error: sendErr } = await sb
     .from("email_send_log")
     .insert({
@@ -350,7 +315,6 @@ async function sendReceipt(args: {
   const sendLogId = sendRow.id as number;
 
   try {
-    // Create draft as in-thread reply
     const draftResp = await composio.execute<Record<string, unknown>>(
       "GMAIL_CREATE_EMAIL_DRAFT",
       {
@@ -387,7 +351,6 @@ async function sendReceipt(args: {
       .update({ status: "draft", gmail_draft_id: draftId })
       .eq("id", sendLogId);
 
-    // Verify via GMAIL_GET_DRAFT
     const verifyResp = await composio.execute<Record<string, unknown>>(
       "GMAIL_GET_DRAFT",
       { user_id: "me", draft_id: draftId, format: "metadata" },
@@ -409,7 +372,6 @@ async function sendReceipt(args: {
       .update({ status: "verified_draft" })
       .eq("id", sendLogId);
 
-    // Send the draft
     const sentResp = await composio.execute<Record<string, unknown>>(
       "GMAIL_SEND_DRAFT",
       { user_id: "me", draft_id: draftId },

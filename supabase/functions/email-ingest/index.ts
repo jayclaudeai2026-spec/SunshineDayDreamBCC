@@ -1,32 +1,13 @@
-// HTTP entry point for the email-ingest Edge Function.
-//
-// Two modes:
-//
-//   1. Single (webhook path):
-//      POST / with body { "message_id": "..." }
-//      Wired to Composio Gmail Trigger at install Phase 6. Trigger pushes the
-//      new message ID; this function fetches, archives, identifies, logs, and
-//      sends the receipt.
-//
-//   2. Poll (backstop path):
-//      POST / with body { "mode": "poll" }
-//      Wired to pg_cron at install Phase 6 (suggested cadence: every 10 min).
-//      Catches anything the trigger missed. Idempotent against the webhook
-//      path via gmail_message_id dedupe.
-//
-// Auth:
-//   If EMAIL_INGEST_WEBHOOK_SECRET is set, all requests must present it as
-//   `Authorization: Bearer <secret>`. Deploy with `--no-verify-jwt` since the
-//   Composio Trigger will not have a Supabase JWT.
-
-import { createServiceRoleClient } from "../_shared/supabase.ts";
-import { ComposioClient } from "../_shared/composio.ts";
+import { createServiceRoleClient } from "./_shared/supabase.ts";
+import { ComposioClient } from "./_shared/composio.ts";
 import { processMessage } from "./process_message.ts";
 import { pollAndProcess } from "./poll.ts";
 
 interface RequestBody {
   message_id?: string;
   mode?: "poll" | "single";
+  lookback_days?: number;
+  send_receipts?: boolean;
 }
 
 Deno.serve(async (req) => {
@@ -34,7 +15,6 @@ Deno.serve(async (req) => {
     return jsonResponse(405, { error: "Method not allowed; use POST" });
   }
 
-  // Auth check (only if secret configured)
   const expectedSecret = Deno.env.get("EMAIL_INGEST_WEBHOOK_SECRET");
   if (expectedSecret) {
     const auth = req.headers.get("authorization") ??
@@ -46,7 +26,6 @@ Deno.serve(async (req) => {
     }
   }
 
-  // Env
   const composioKey = Deno.env.get("COMPOSIO_API_KEY");
   if (!composioKey) {
     return jsonResponse(500, {
@@ -54,7 +33,8 @@ Deno.serve(async (req) => {
     });
   }
 
-  // Parse body
+  const composioUserId = Deno.env.get("COMPOSIO_USER_ID") ?? "default";
+
   let body: RequestBody;
   try {
     body = await req.json();
@@ -62,13 +42,16 @@ Deno.serve(async (req) => {
     body = {};
   }
 
+  const envSendReceipts = (Deno.env.get("EMAIL_INGEST_SEND_RECEIPTS") ?? "").toLowerCase() === "true";
+  const sendReceipts = body.send_receipts === true ? true : (body.send_receipts === false ? false : envSendReceipts);
+
   const sb = createServiceRoleClient();
-  const composio = new ComposioClient({ apiKey: composioKey });
+  const composio = new ComposioClient({ apiKey: composioKey, userId: composioUserId });
 
   try {
     if (body.mode === "poll") {
-      const out = await pollAndProcess({ sb, composio });
-      return jsonResponse(200, { mode: "poll", ...out });
+      const out = await pollAndProcess({ sb, composio, lookbackDays: body.lookback_days, sendReceipts });
+      return jsonResponse(200, { mode: "poll", send_receipts: sendReceipts, ...out });
     }
 
     if (body.message_id) {
@@ -76,8 +59,9 @@ Deno.serve(async (req) => {
         sb,
         composio,
         message_id: body.message_id,
+        sendReceipts,
       });
-      return jsonResponse(200, { mode: "single", ...out });
+      return jsonResponse(200, { mode: "single", send_receipts: sendReceipts, ...out });
     }
 
     return jsonResponse(400, {
