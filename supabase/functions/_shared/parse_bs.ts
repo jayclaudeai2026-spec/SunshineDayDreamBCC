@@ -17,25 +17,47 @@
 // drift caused by unmapped intercompany + member-capital accounts.
 //   Bug J: detectSection regex /^(current\s+)?assets?$/ eats "Current Assets"
 //     and returns null, so section never transitions to current_assets.
-//     Fix: tighten regex to /^assets?$/ — "Current Assets" now flows to the
-//     `t === "current assets"` branch and sets section correctly.
-//   Bug K: Intercompany receivables ("Due from X", "NR - X", "Notes Receivable X")
-//     and intercompany payables ("Due to X") never matched any pattern, so
-//     they fell to account_detail unmapped, leaving BS A=L+E off by
-//     intercompany totals. Fix: add explicit patterns to accounts_receivable
-//     ("due from", "nr -", "nr-", "notes receivable") and accounts_payable
-//     ("due to").
-//   Bug L: Member-capital accounts ("Members Equity", "Opening Balance Equity",
-//     "Opening Bal Equity", "Jay Trudeau", "Mariann Trudeau") fell unmapped
-//     in the equity section. Fix: add explicit patterns to paid_in_capital,
-//     plus change the equity-section catch-all in addToBS from
-//     account_detail to paid_in_capital so any future named equity account
-//     also gets categorized (signed, not abs).
-//   Bug M: "Members Draw" (and "Member Draw") didn't match owner_distributions
-//     patterns (which had "member distribution" / "owner draw" but not
-//     "members draw"). Fix: add "members draw", "member draw".
-//   Bug N: "Undeposited Funds" never matched cash pattern. Fix: add
-//     "undeposited funds".
+//     Fix: tighten regex to /^assets?$/.
+//   Bug K: Intercompany receivables ("Due from X", "NR - X") and intercompany
+//     payables ("Due to X") fell unmapped. Fix: add patterns to AR/AP.
+//   Bug L: Member-capital accounts (Members Equity, Opening Bal Equity, Jay/
+//     Mariann Trudeau) fell unmapped in equity. Fix: explicit patterns +
+//     equity-section catch-all routes to paid_in_capital.
+//   Bug M: "Members Draw" / "Member Draw" didn't match owner_distributions. Add.
+//   Bug N: "Undeposited Funds" didn't match cash. Add.
+//
+// 2026-06-18 v10 patch: Gate 3 — subsection awareness for inventory, AR/AP
+// nested headers, and shareholder/owner distributions.
+//   Bug O: "Inventory" parent header in YRD's BS (Alcohol/Gasoline/Lottery/
+//     Tobacco/Store General Merchandise) wasn't a recognized subsection,
+//     so leaves fell to other_current_assets via section catch-all. Fix:
+//     add "inventory" subsection that routes leaves to the inventory column.
+//   Bug P: "Accounts Receivable" used as a SUBSECTION header (YRD: ATM/
+//     Buydowns/Coupons/Food Stamp/House Accounts nested under it) wasn't
+//     detected. Worse: any subsection-style header that detectSubsection
+//     didn't recognize did NOT reset the previously-set subsection (e.g.
+//     "Checking/Savings" set earlier persisted into Accounts Receivable,
+//     causing those leaves to be routed to `cash`). Fix: add "accounts
+//     receivable" / "a/r" and "accounts payable" / "a/p" as recognized
+//     subsections routing to the respective columns.
+//   Bug Q: v9 added explicit "jay trudeau" / "mariann trudeau" patterns
+//     routing to paid_in_capital. WRONG for YRD/Sunshine Imports/Cosmic
+//     Corner where Jay/Mariann are leaves under a "Shareholder Distributions"
+//     or "Distributions" subsection — they should route to
+//     owner_distributions. Fix: REMOVE the v9 name patterns from
+//     paid_in_capital RULES, and add a "distributions" subsection that
+//     routes unrecognized leaves under it to owner_distributions. The v9
+//     equity-section catch-all (paid_in_capital) still handles equity-section
+//     leaves NOT inside a distributions subsection (e.g. SD's "Due Officer").
+//   Bug R: subsections persisted past their natural scope. Once a subsection
+//     was set (e.g. "Inventory"), it stayed active until the next section
+//     transition or another recognized subsection header. So in YRD where
+//     "Paid on Account" sits between "Total Inventory" and the end of
+//     Other Current Assets, "Paid on Account" inherited subsection=inventory
+//     and was routed to the inventory column. Fix: on any subtotal row whose
+//     label matches the current subsection's "Total X" form (e.g. "Total
+//     Inventory" while subsection=inventory), reset subsection to null
+//     before falling through to the subtotal-skip.
 
 import { detectDateCell, isBlankRow, parseNumber } from "./csv.ts";
 
@@ -80,7 +102,10 @@ const RULES: BSRule[] = [
   { column: "accrued_expenses",      patterns: ["accrued", "payroll liabilities", "payroll tax", "sales tax payable"] },
   { column: "deferred_revenue",      patterns: ["deferred revenue", "unearned", "customer deposit", "gift certificate"] },
   { column: "long_term_debt",        patterns: ["long-term debt", "long term debt", "loan payable", "mortgage", "notes payable"], excludes: ["short"] },
-  { column: "paid_in_capital",       patterns: ["paid-in capital", "paid in capital", "common stock", "capital stock", "owner contribution", "capital contribution", "owner investment", "members equity", "member equity", "opening balance equity", "opening bal equity", "jay trudeau", "mariann trudeau"] },
+  // v10 Bug Q: removed "jay trudeau" and "mariann trudeau" — now handled via
+  // distributions subsection so they route to owner_distributions in entities
+  // where they appear under "Shareholder Distributions" / "Distributions".
+  { column: "paid_in_capital",       patterns: ["paid-in capital", "paid in capital", "common stock", "capital stock", "owner contribution", "capital contribution", "owner investment", "members equity", "member equity", "opening balance equity", "opening bal equity"] },
   { column: "retained_earnings",     patterns: ["retained earnings"] },
   { column: "owner_distributions",   patterns: ["distribution", "dividend", "owner draw", "owner's draw", "shareholder distribution", "member distribution", "members draw", "member draw"] },
   { column: "current_year_earnings", patterns: ["current year earnings", "net earnings"] },
@@ -108,11 +133,14 @@ type BSSubsection =
   | "checking_savings"
   | "credit_cards"
   | "payroll_liabilities"
+  | "inventory"           // v10 Bug O
+  | "accounts_receivable" // v10 Bug P
+  | "accounts_payable"    // v10 Bug P
+  | "distributions"       // v10 Bug Q
   | null;
 
 function detectSection(label: string): BSSection | null {
   const t = label.trim().toLowerCase();
-  // v9 Bug J fix: tightened regex so "Current Assets" no longer eaten as null.
   if (/^assets?$/.test(t) || t.startsWith("total assets")) return null;
   if (t === "current assets") return "current_assets";
   if (t === "other assets" || t === "fixed assets" || t === "long-term assets" || t === "long term assets") return "long_term_assets";
@@ -129,6 +157,17 @@ function detectSubsection(label: string): BSSubsection | null {
   if (t === "checking/savings" || t === "checking and savings") return "checking_savings";
   if (t === "credit cards") return "credit_cards";
   if (t === "payroll liabilities") return "payroll_liabilities";
+  // v10 Bug O:
+  if (t === "inventory") return "inventory";
+  // v10 Bug P:
+  if (t === "accounts receivable" || t === "a/r") return "accounts_receivable";
+  if (t === "accounts payable" || t === "a/p") return "accounts_payable";
+  // v10 Bug Q:
+  if (
+    t === "shareholder distributions" || t === "distributions" ||
+    t === "member distributions" || t === "owner distributions" ||
+    t === "members distributions" || t === "owners distributions"
+  ) return "distributions";
   if (t === "other current assets" || t === "other current liabilities") return null;
   return null;
 }
@@ -221,16 +260,29 @@ function addToBS(
     column = "short_term_debt";
   } else if (subsection === "payroll_liabilities") {
     column = "accrued_expenses";
+  } else if (subsection === "inventory") {
+    // v10 Bug O: leaves under Inventory subsection (Alcohol/Gasoline/Lottery
+    // /Tobacco etc.) route to inventory column.
+    column = "inventory";
+  } else if (subsection === "accounts_receivable") {
+    // v10 Bug P: leaves under Accounts Receivable subsection route to AR.
+    column = "accounts_receivable";
+  } else if (subsection === "accounts_payable") {
+    // v10 Bug P: leaves under Accounts Payable subsection route to AP.
+    column = "accounts_payable";
+  } else if (subsection === "distributions") {
+    // v10 Bug Q: leaves under Distributions / Shareholder Distributions
+    // subsection (Jay/Mariann Trudeau named lines, Distributions - Other,
+    // etc.) route to owner_distributions. Note: owner_distributions takes
+    // Math.abs() below to normalize sign — distributions are stored as
+    // positive magnitudes regardless of source sign convention.
+    column = "owner_distributions";
   } else {
     switch (section) {
       case "current_assets":         column = "other_current_assets"; break;
       case "long_term_assets":       column = "other_long_term_assets"; break;
       case "current_liabilities":    column = "other_current_liab"; break;
       case "long_term_liabilities":  column = "other_long_term_liab"; break;
-      // v9 Bug L fix: equity catch-all routes to paid_in_capital (signed) so
-      // any named equity account (Jay Trudeau, Mariann Trudeau, etc.) without
-      // an explicit pattern still lands in the equity column rather than
-      // dropping out of the balance equation.
       case "equity":                 column = "paid_in_capital"; break;
       default:                       column = "account_detail";
     }
@@ -300,6 +352,30 @@ export function parseBSMonthly(args: {
       if (!hasData) { subsection = newSubsection; continue; }
     }
 
+    // v10 Bug R: subtotal that ends the current subsection's scope resets
+    // subsection so the next leaves don't inherit it.
+    if (subsection !== null) {
+      const tLow = label.trim().toLowerCase();
+      const SUBTOTAL_RESETS: Record<string, string[]> = {
+        checking_savings: ["total checking/savings", "total checking and savings"],
+        credit_cards: ["total credit cards"],
+        payroll_liabilities: ["total payroll liabilities"],
+        inventory: ["total inventory"],
+        accounts_receivable: ["total accounts receivable", "total a/r"],
+        accounts_payable: ["total accounts payable", "total a/p"],
+        distributions: [
+          "total distributions",
+          "total shareholder distributions",
+          "total member distributions",
+          "total owner distributions",
+          "total members distributions",
+          "total owners distributions",
+        ],
+      };
+      const matches = SUBTOTAL_RESETS[subsection] ?? [];
+      if (matches.includes(tLow)) { subsection = null; continue; }
+    }
+
     if (isBSSubtotalRow(label, section)) continue;
 
     const cell = row[amountCol] ?? "";
@@ -366,6 +442,30 @@ export function parseBSColumnar(args: {
         if (parseNumber(row[dc.index] ?? "") !== 0) { hasData = true; break; }
       }
       if (!hasData) { subsection = newSubsection; continue; }
+    }
+
+    // v10 Bug R: subtotal that ends the current subsection's scope resets
+    // subsection so the next leaves don't inherit it.
+    if (subsection !== null) {
+      const tLow = label.trim().toLowerCase();
+      const SUBTOTAL_RESETS: Record<string, string[]> = {
+        checking_savings: ["total checking/savings", "total checking and savings"],
+        credit_cards: ["total credit cards"],
+        payroll_liabilities: ["total payroll liabilities"],
+        inventory: ["total inventory"],
+        accounts_receivable: ["total accounts receivable", "total a/r"],
+        accounts_payable: ["total accounts payable", "total a/p"],
+        distributions: [
+          "total distributions",
+          "total shareholder distributions",
+          "total member distributions",
+          "total owner distributions",
+          "total members distributions",
+          "total owners distributions",
+        ],
+      };
+      const matches = SUBTOTAL_RESETS[subsection] ?? [];
+      if (matches.includes(tLow)) { subsection = null; continue; }
     }
 
     if (isBSSubtotalRow(label, section)) continue;
