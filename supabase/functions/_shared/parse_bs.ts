@@ -7,11 +7,35 @@
 //     Bank") never matched the cash pattern. Fix: detect subsection "Checking/
 //     Savings" and route leaves to cash.
 //   Bug G: "Net Income" leaf under QB Equity section was filtered by isTotalRow
-//     (matches /^net\\s+income$/i). Fix: BS-local isBSSubtotalRow respects equity
+//     (matches /^net\s+income$/i). Fix: BS-local isBSSubtotalRow respects equity
 //     section context. Net Income inside Equity routes to current_year_earnings.
 //   Also: subsection routing for "Credit Cards" -> short_term_debt and
 //     "Payroll Liabilities" -> accrued_expenses, where leaves are named after
 //     the card issuer or tax authority and don't match generic patterns.
+//
+// 2026-06-18 v9 patch: BS pattern expansion (Gate 2) — collapse entity-level
+// drift caused by unmapped intercompany + member-capital accounts.
+//   Bug J: detectSection regex /^(current\s+)?assets?$/ eats "Current Assets"
+//     and returns null, so section never transitions to current_assets.
+//     Fix: tighten regex to /^assets?$/ — "Current Assets" now flows to the
+//     `t === "current assets"` branch and sets section correctly.
+//   Bug K: Intercompany receivables ("Due from X", "NR - X", "Notes Receivable X")
+//     and intercompany payables ("Due to X") never matched any pattern, so
+//     they fell to account_detail unmapped, leaving BS A=L+E off by
+//     intercompany totals. Fix: add explicit patterns to accounts_receivable
+//     ("due from", "nr -", "nr-", "notes receivable") and accounts_payable
+//     ("due to").
+//   Bug L: Member-capital accounts ("Members Equity", "Opening Balance Equity",
+//     "Opening Bal Equity", "Jay Trudeau", "Mariann Trudeau") fell unmapped
+//     in the equity section. Fix: add explicit patterns to paid_in_capital,
+//     plus change the equity-section catch-all in addToBS from
+//     account_detail to paid_in_capital so any future named equity account
+//     also gets categorized (signed, not abs).
+//   Bug M: "Members Draw" (and "Member Draw") didn't match owner_distributions
+//     patterns (which had "member distribution" / "owner draw" but not
+//     "members draw"). Fix: add "members draw", "member draw".
+//   Bug N: "Undeposited Funds" never matched cash pattern. Fix: add
+//     "undeposited funds".
 
 import { detectDateCell, isBlankRow, parseNumber } from "./csv.ts";
 
@@ -44,21 +68,21 @@ interface BSRule {
 }
 
 const RULES: BSRule[] = [
-  { column: "cash",                  patterns: ["cash", "checking", "savings", "money market", "petty cash", "bank account"] },
-  { column: "accounts_receivable",   patterns: ["accounts receivable", "a/r", "receivable", "trade receivable"] },
+  { column: "cash",                  patterns: ["cash", "checking", "savings", "money market", "petty cash", "bank account", "undeposited funds"] },
+  { column: "accounts_receivable",   patterns: ["accounts receivable", "a/r", "receivable", "trade receivable", "due from", "nr -", "nr-", "notes receivable"] },
   { column: "inventory",             patterns: ["inventory", "stock on hand", "merchandise"] },
   { column: "prepaid_expenses",      patterns: ["prepaid", "prepaid expense"] },
   { column: "accumulated_depreciation", patterns: ["accumulated depreciation", "less depreciation"] },
   { column: "fixed_assets_gross",    patterns: ["fixed asset", "equipment", "machinery", "vehicle", "furniture", "leasehold improvement", "building", "land", "computer"] },
   { column: "intangible_assets",     patterns: ["goodwill", "intangible", "trademark", "patent", "franchise"] },
-  { column: "accounts_payable",      patterns: ["accounts payable", "a/p", "trade payable"] },
+  { column: "accounts_payable",      patterns: ["accounts payable", "a/p", "trade payable", "due to"] },
   { column: "short_term_debt",       patterns: ["short-term debt", "short term debt", "line of credit", "credit card", "current portion"] },
   { column: "accrued_expenses",      patterns: ["accrued", "payroll liabilities", "payroll tax", "sales tax payable"] },
   { column: "deferred_revenue",      patterns: ["deferred revenue", "unearned", "customer deposit", "gift certificate"] },
   { column: "long_term_debt",        patterns: ["long-term debt", "long term debt", "loan payable", "mortgage", "notes payable"], excludes: ["short"] },
-  { column: "paid_in_capital",       patterns: ["paid-in capital", "paid in capital", "common stock", "capital stock", "owner contribution", "capital contribution", "owner investment"] },
+  { column: "paid_in_capital",       patterns: ["paid-in capital", "paid in capital", "common stock", "capital stock", "owner contribution", "capital contribution", "owner investment", "members equity", "member equity", "opening balance equity", "opening bal equity", "jay trudeau", "mariann trudeau"] },
   { column: "retained_earnings",     patterns: ["retained earnings"] },
-  { column: "owner_distributions",   patterns: ["distribution", "dividend", "owner draw", "owner's draw", "shareholder distribution", "member distribution"] },
+  { column: "owner_distributions",   patterns: ["distribution", "dividend", "owner draw", "owner's draw", "shareholder distribution", "member distribution", "members draw", "member draw"] },
   { column: "current_year_earnings", patterns: ["current year earnings", "net earnings"] },
 ];
 
@@ -88,7 +112,8 @@ type BSSubsection =
 
 function detectSection(label: string): BSSection | null {
   const t = label.trim().toLowerCase();
-  if (/^(current\s+)?assets?$/.test(t) || t.startsWith("total assets")) return null;
+  // v9 Bug J fix: tightened regex so "Current Assets" no longer eaten as null.
+  if (/^assets?$/.test(t) || t.startsWith("total assets")) return null;
   if (t === "current assets") return "current_assets";
   if (t === "other assets" || t === "fixed assets" || t === "long-term assets" || t === "long term assets") return "long_term_assets";
   if (t === "current liabilities") return "current_liabilities";
@@ -202,7 +227,11 @@ function addToBS(
       case "long_term_assets":       column = "other_long_term_assets"; break;
       case "current_liabilities":    column = "other_current_liab"; break;
       case "long_term_liabilities":  column = "other_long_term_liab"; break;
-      case "equity":                 column = "account_detail"; break;
+      // v9 Bug L fix: equity catch-all routes to paid_in_capital (signed) so
+      // any named equity account (Jay Trudeau, Mariann Trudeau, etc.) without
+      // an explicit pattern still lands in the equity column rather than
+      // dropping out of the balance equation.
+      case "equity":                 column = "paid_in_capital"; break;
       default:                       column = "account_detail";
     }
   }
