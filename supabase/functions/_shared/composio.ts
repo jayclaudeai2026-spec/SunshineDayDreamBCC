@@ -1,17 +1,4 @@
 // Thin wrapper around Composio's REST API.
-//
-// CRITICAL DESIGN NOTE:
-//   We never pass connected_account_id. Composio resolves each toolkit call
-//   to the workspace's currently-active connection automatically. This means
-//   when the user re-auths Gmail/Drive/etc. in the Composio dashboard (which
-//   mints a fresh connectedAccountId), our Edge Function keeps working with
-//   zero code/env changes — the workspace pointer just updates under the hood.
-//   Hard-coding the connectedAccountId (in env vars OR in the database) would
-//   break the function on every OAuth reconnect.
-//
-// The only Composio credential we depend on is COMPOSIO_API_KEY, which
-// identifies the workspace, not any individual connection.
-
 const COMPOSIO_BASE = "https://backend.composio.dev/api/v3";
 
 export class ComposioError extends Error {
@@ -30,8 +17,8 @@ export class ComposioError extends Error {
 export interface ComposioClientOptions {
   apiKey: string;
   baseUrl?: string;
-  userId?: string;        // optional override; defaults to "default" workspace user
-  timeoutMs?: number;     // per-call timeout
+  userId?: string;
+  timeoutMs?: number;
 }
 
 export class ComposioClient {
@@ -85,7 +72,7 @@ export class ComposioClient {
     try {
       payload = text ? JSON.parse(text) : null;
     } catch {
-      // leave payload null; raw text surfaced in error
+      // leave payload null
     }
 
     const pAny = payload as Record<string, unknown> | null;
@@ -100,7 +87,7 @@ export class ComposioClient {
 
     if (!resp.ok) {
       throw new ComposioError(
-        `Composio ${toolSlug} failed: HTTP ${resp.status} — ${
+        `Composio ${toolSlug} failed: HTTP ${resp.status} \u2014 ${
           errMsgRaw || text.slice(0, 300)
         }`,
         toolSlug,
@@ -110,9 +97,6 @@ export class ComposioClient {
       );
     }
 
-    // Successful Composio v3 responses wrap output under `data`.
-    // Tool-specific responses then often nest their actual fields one level deeper.
-    // Return whichever shape exists; callers unwrap as needed.
     if (pAny && typeof pAny === "object" && "data" in pAny) {
       return pAny.data as T;
     }

@@ -26,8 +26,8 @@
 //
 // Auth: same shared-secret pattern as email-ingest.
 
-import { createServiceRoleClient } from "../_shared/supabase.ts";
-import { ComposioClient } from "../_shared/composio.ts";
+import { createServiceRoleClient } from "./_shared/supabase.ts";
+import { ComposioClient } from "./_shared/composio.ts";
 import { processIngest } from "./process_ingest.ts";
 import { processSingleCsv } from "./process_ingest.ts";
 
@@ -108,10 +108,6 @@ Deno.serve(async (req) => {
     return jsonResponse(500, { error: msg.slice(0, 1000) });
   }
 });
-
-// ----------------------------------------------------------------------------
-// Poll mode: find pending ingest_log rows with entity_id set, process each.
-// ----------------------------------------------------------------------------
 
 async function pollPending(args: {
   sb: ReturnType<typeof createServiceRoleClient>;

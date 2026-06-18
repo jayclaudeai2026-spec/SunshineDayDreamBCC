@@ -1,24 +1,16 @@
 // Pipeline for processing one ingest_log row through the parser.
-//
-// For each Drive file referenced by the ingest_log row:
-//   1. Fetch the CSV text (via fetchCsvText — STUB in v1, see drive_download.ts)
-//   2. Detect report type
-//   3. Dispatch to the matching parser (PL / BS / GL)
-//   4. UPSERT into the appropriate financial table
-//
-// At end, update ingest_log.parse_result and row_counts.
 
-import type { SupabaseClient } from "../_shared/supabase.ts";
-import type { ComposioClient } from "../_shared/composio.ts";
-import { parseCsvText, detectMonthColumns } from "../_shared/csv.ts";
-import { detectReportType } from "../_shared/report_type.ts";
-import { parsePLYearlyColumnar, parsePLMonthly } from "../_shared/parse_pl.ts";
-import { parseBSMonthly, parseBSColumnar } from "../_shared/parse_bs.ts";
-import { parseGL } from "../_shared/parse_gl.ts";
-import { fetchCsvText, DriveDownloadNotWiredError } from "../_shared/drive_download.ts";
-import type { ParsedPLRow } from "../_shared/parse_pl.ts";
-import type { ParsedBSRow } from "../_shared/parse_bs.ts";
-import type { ParsedGLRow } from "../_shared/parse_gl.ts";
+import type { SupabaseClient } from "./_shared/supabase.ts";
+import type { ComposioClient } from "./_shared/composio.ts";
+import { parseCsvText, detectMonthColumns } from "./_shared/csv.ts";
+import { detectReportType } from "./_shared/report_type.ts";
+import { parsePLYearlyColumnar, parsePLMonthly } from "./_shared/parse_pl.ts";
+import { parseBSMonthly, parseBSColumnar } from "./_shared/parse_bs.ts";
+import { parseGL } from "./_shared/parse_gl.ts";
+import { fetchCsvText, DriveDownloadNotWiredError } from "./_shared/drive_download.ts";
+import type { ParsedPLRow } from "./_shared/parse_pl.ts";
+import type { ParsedBSRow } from "./_shared/parse_bs.ts";
+import type { ParsedGLRow } from "./_shared/parse_gl.ts";
 
 export interface ProcessIngestResult {
   ingest_id: number;
@@ -113,7 +105,6 @@ export async function processIngest(args: {
         error: msg,
       });
       if (err instanceof DriveDownloadNotWiredError) {
-        // expected in v1; the test mode bypasses fetchCsvText entirely
         console.warn(`Drive download not yet wired (ingest ${ingest_id}, file ${driveFileId})`);
       } else {
         console.error(`Parser file failure (ingest ${ingest_id}, file ${driveFileId}): ${msg}`);
@@ -141,10 +132,6 @@ export async function processIngest(args: {
   return { ingest_id, parse_result: parseResult, row_counts: rowCounts, per_file: perFile };
 }
 
-// ----------------------------------------------------------------------------
-// Single-CSV processor (also reusable from direct-CSV test mode)
-// ----------------------------------------------------------------------------
-
 export interface SingleCsvResult {
   report_type: string;
   rows_written: number;
@@ -157,8 +144,8 @@ export async function processSingleCsv(args: {
   sb: SupabaseClient;
   csvText: string;
   entity_id: number;
-  ingest_id?: number | null;       // optional; null when in test mode
-  fallbackPeriod?: string | null;  // YYYY-MM-01, used for single-period reports
+  ingest_id?: number | null;
+  fallbackPeriod?: string | null;
   source_file_path?: string | null;
 }): Promise<SingleCsvResult> {
   const { sb, csvText, entity_id } = args;
@@ -191,7 +178,7 @@ export async function processSingleCsv(args: {
     }
     case "pl_monthly": {
       if (!fallbackPeriod) {
-        warnings.push("pl_monthly requires fallbackPeriod (ingest_log.reporting_period) — skipping");
+        warnings.push("pl_monthly requires fallbackPeriod (ingest_log.reporting_period) \u2014 skipping");
         break;
       }
       const out = parsePLMonthly({
@@ -208,10 +195,9 @@ export async function processSingleCsv(args: {
     }
     case "bs_monthly": {
       if (!fallbackPeriod) {
-        warnings.push("bs_monthly requires fallbackPeriod for period_end inference — skipping");
+        warnings.push("bs_monthly requires fallbackPeriod for period_end inference \u2014 skipping");
         break;
       }
-      // Use last day of the fallback period's month
       const period_end = lastDayOfMonth(fallbackPeriod);
       const out = parseBSMonthly({
         rows,
@@ -264,7 +250,7 @@ export async function processSingleCsv(args: {
     }
     case "unknown":
     default: {
-      warnings.push("Report type unknown — no rows written");
+      warnings.push("Report type unknown \u2014 no rows written");
       break;
     }
   }
@@ -278,14 +264,9 @@ export async function processSingleCsv(args: {
   };
 }
 
-// ----------------------------------------------------------------------------
-// UPSERT helpers
-// ----------------------------------------------------------------------------
-
 function lastDayOfMonth(yyyymm01: string): string {
-  // "2026-05-01" → "2026-05-31"
   const [y, m] = yyyymm01.split("-").map((s) => parseInt(s, 10));
-  const d = new Date(Date.UTC(y, m, 0)); // day 0 of next month = last of this
+  const d = new Date(Date.UTC(y, m, 0));
   return d.toISOString().slice(0, 10);
 }
 
@@ -316,6 +297,7 @@ async function upsertPLRows(args: {
     office_supplies: r.office_supplies,
     bank_fees: r.bank_fees,
     other_opex: r.other_opex,
+    other_expense: r.other_expense,
     depreciation: r.depreciation,
     amortization: r.amortization,
     interest_expense: r.interest_expense,
@@ -385,10 +367,6 @@ async function insertGLRows(args: {
   const { sb, rows, ingest_id } = args;
   if (rows.length === 0) return 0;
 
-  // gl_entries_archive has no natural unique key — append-only.
-  // To avoid double-load on retry, we delete any existing rows for this
-  // ingest_id first, then insert. This keeps the operation idempotent
-  // per-ingest without requiring a UNIQUE constraint on the table.
   if (ingest_id != null) {
     const { error: delErr } = await sb
       .from("gl_entries_archive")
@@ -415,7 +393,6 @@ async function insertGLRows(args: {
     source_file_path: r.source_file_path,
   }));
 
-  // Insert in batches to avoid hitting payload-size limits (GL can be huge)
   const BATCH = 500;
   let written = 0;
   for (let i = 0; i < payload.length; i += BATCH) {
