@@ -58,6 +58,47 @@
 //     label matches the current subsection's "Total X" form (e.g. "Total
 //     Inventory" while subsection=inventory), reset subsection to null
 //     before falling through to the subtotal-skip.
+//
+// 2026-06-18 v11 patch: Gate 4 — categorical cleanup of named accounts that
+// landed in the other_* bucket columns under v10. Predicted drift impact is
+// zero (every move is intra-side column reshuffling), so this patch is purely
+// about BS report quality: intangibles where intangibles belong, accumulated
+// depreciation as a contra against fixed assets, intercompany notes payable
+// classified as debt instead of generic OCL.
+//   Bug S: "NP - X" / "N/P X" intercompany notes payable were falling to the
+//     other_current_liab or other_long_term_liab bucket via section catch-all.
+//     v9 added the AR counterpart "NR -" (Bug K) but not the AP counterpart.
+//     Fix: section-aware routing in addToBS — if label matches NP-/N/P pattern
+//     and section is current_liabilities, route to short_term_debt; if
+//     long_term_liabilities, route to long_term_debt. This PRESERVES the
+//     current/LT placement QB chose in the source rather than forcing all
+//     intercompany notes into long_term_debt. Implementation lives in addToBS
+//     (not RULES) because section context is required.
+//   Bug T: Three depreciation/amortization patterns missed under v10.
+//     T1 — "Accum Depn" (abbreviated form) didn't match the existing
+//       "accumulated depreciation" pattern. Fix: add "accum depn", "accum
+//       depr", "accum dep" patterns. The trailing "accum dep" subsumes
+//       "accumulated depreciation" with no regression risk.
+//     T2 — "Accumulated Amortization" had no home (no amortization column
+//       on BS table). v10 put it in other_long_term_assets with its negative
+//       value — structurally correct (it reduces total assets) but semantically
+//       it should be a contra against intangibles. Fix: add to intangible_assets
+//       RULES. Net intangibles column will now show gross-net-of-amortization.
+//     T3 — "Trailer 2022 A/D" suffix-style accumulated depreciation (QB
+//       subaccount convention). Fix: add " a/d" (leading-space token) to
+//       accumulated_depreciation patterns. The leading space prevents matches
+//       on unrelated strings.
+//   Bug U: Fixed asset abbreviations missed under v10.
+//     "Furn & Equip" — neither "furniture" nor "equipment" (which is 9 chars)
+//       matched the 5-char "equip" substring. Fix: add "equip" pattern (which
+//       subsumes "equipment" — substring check). Also add "furn ", "furn&",
+//       "f&e" for explicit abbreviated forms.
+//     "Trailer 2022" / "Forklift - 2024" — vehicle/equipment types not in
+//       v10 patterns. Fix: add "trailer", "forklift".
+//   Bug V: "Name & Rights" (intangible) and "Gift Cert- Outstanding"
+//     (deferred revenue) abbreviations missed.
+//     Fix: add "name & rights", "name and rights" to intangible_assets.
+//     Add "gift cert" to deferred_revenue (subsumes existing "gift certificate").
 
 import { detectDateCell, isBlankRow, parseNumber } from "./csv.ts";
 
@@ -94,13 +135,19 @@ const RULES: BSRule[] = [
   { column: "accounts_receivable",   patterns: ["accounts receivable", "a/r", "receivable", "trade receivable", "due from", "nr -", "nr-", "notes receivable"] },
   { column: "inventory",             patterns: ["inventory", "stock on hand", "merchandise"] },
   { column: "prepaid_expenses",      patterns: ["prepaid", "prepaid expense"] },
-  { column: "accumulated_depreciation", patterns: ["accumulated depreciation", "less depreciation"] },
-  { column: "fixed_assets_gross",    patterns: ["fixed asset", "equipment", "machinery", "vehicle", "furniture", "leasehold improvement", "building", "land", "computer"] },
-  { column: "intangible_assets",     patterns: ["goodwill", "intangible", "trademark", "patent", "franchise"] },
+  // v11 Bug T1/T3: add accum-depn abbreviations + suffix-style " a/d" subaccounts.
+  { column: "accumulated_depreciation", patterns: ["accumulated depreciation", "less depreciation", "accum depn", "accum depr", "accum dep", " a/d"] },
+  // v11 Bug U: add "equip" (subsumes "equipment"; catches "Furn & Equip"),
+  // furniture abbreviations, and vehicle/equipment named types.
+  { column: "fixed_assets_gross",    patterns: ["fixed asset", "equipment", "equip", "machinery", "vehicle", "furniture", "furn ", "furn&", "f&e", "leasehold improvement", "building", "land", "computer", "trailer", "forklift"] },
+  // v11 Bug T2/V: add Accumulated Amortization (negative contra against intangibles)
+  // and "Name & Rights" intangible type.
+  { column: "intangible_assets",     patterns: ["goodwill", "intangible", "trademark", "patent", "franchise", "accumulated amortization", "accum amort", "accumulated amort", "name & rights", "name and rights"] },
   { column: "accounts_payable",      patterns: ["accounts payable", "a/p", "trade payable", "due to"] },
   { column: "short_term_debt",       patterns: ["short-term debt", "short term debt", "line of credit", "credit card", "current portion"] },
   { column: "accrued_expenses",      patterns: ["accrued", "payroll liabilities", "payroll tax", "sales tax payable"] },
-  { column: "deferred_revenue",      patterns: ["deferred revenue", "unearned", "customer deposit", "gift certificate"] },
+  // v11 Bug V: add "gift cert" abbreviation (subsumes "gift certificate").
+  { column: "deferred_revenue",      patterns: ["deferred revenue", "unearned", "customer deposit", "gift certificate", "gift cert"] },
   { column: "long_term_debt",        patterns: ["long-term debt", "long term debt", "loan payable", "mortgage", "notes payable"], excludes: ["short"] },
   // v10 Bug Q: removed "jay trudeau" and "mariann trudeau" — now handled via
   // distributions subsection so they route to owner_distributions in entities
@@ -121,6 +168,17 @@ function classifyBS(accountName: string): BSColumn | "other" {
   return "other";
 }
 
+// v11 Bug S: section-aware NP-/N/P intercompany notes payable detection.
+// Returns true when the label is an intercompany note payable abbreviation.
+// Used in addToBS to route to short_term_debt or long_term_debt based on the
+// section context (preserving QB's current/LT classification).
+function isNotePayableLabel(label: string): boolean {
+  const t = label.trim().toLowerCase();
+  // Match "np -", "np-", "n/p -", "n/p -" at start of label.
+  // Examples: "NP - SUNSHINE IMPORTS", "NP-SPILLC", "N/P Commerce - 244 Indacom"
+  return /^np\s*-/.test(t) || t.startsWith("n/p");
+}
+
 type BSSection =
   | "current_assets"
   | "long_term_assets"
@@ -133,10 +191,10 @@ type BSSubsection =
   | "checking_savings"
   | "credit_cards"
   | "payroll_liabilities"
-  | "inventory"           // v10 Bug O
-  | "accounts_receivable" // v10 Bug P
-  | "accounts_payable"    // v10 Bug P
-  | "distributions"       // v10 Bug Q
+  | "inventory"
+  | "accounts_receivable"
+  | "accounts_payable"
+  | "distributions"
   | null;
 
 function detectSection(label: string): BSSection | null {
@@ -157,12 +215,9 @@ function detectSubsection(label: string): BSSubsection | null {
   if (t === "checking/savings" || t === "checking and savings") return "checking_savings";
   if (t === "credit cards") return "credit_cards";
   if (t === "payroll liabilities") return "payroll_liabilities";
-  // v10 Bug O:
   if (t === "inventory") return "inventory";
-  // v10 Bug P:
   if (t === "accounts receivable" || t === "a/r") return "accounts_receivable";
   if (t === "accounts payable" || t === "a/p") return "accounts_payable";
-  // v10 Bug Q:
   if (
     t === "shareholder distributions" || t === "distributions" ||
     t === "member distributions" || t === "owner distributions" ||
@@ -254,6 +309,8 @@ function addToBS(
 
   if (cls !== "other") {
     column = cls;
+  } else if (isNotePayableLabel(label) && (section === "current_liabilities" || section === "long_term_liabilities")) {
+    column = section === "current_liabilities" ? "short_term_debt" : "long_term_debt";
   } else if (subsection === "checking_savings") {
     column = "cash";
   } else if (subsection === "credit_cards") {
@@ -261,21 +318,12 @@ function addToBS(
   } else if (subsection === "payroll_liabilities") {
     column = "accrued_expenses";
   } else if (subsection === "inventory") {
-    // v10 Bug O: leaves under Inventory subsection (Alcohol/Gasoline/Lottery
-    // /Tobacco etc.) route to inventory column.
     column = "inventory";
   } else if (subsection === "accounts_receivable") {
-    // v10 Bug P: leaves under Accounts Receivable subsection route to AR.
     column = "accounts_receivable";
   } else if (subsection === "accounts_payable") {
-    // v10 Bug P: leaves under Accounts Payable subsection route to AP.
     column = "accounts_payable";
   } else if (subsection === "distributions") {
-    // v10 Bug Q: leaves under Distributions / Shareholder Distributions
-    // subsection (Jay/Mariann Trudeau named lines, Distributions - Other,
-    // etc.) route to owner_distributions. Note: owner_distributions takes
-    // Math.abs() below to normalize sign — distributions are stored as
-    // positive magnitudes regardless of source sign convention.
     column = "owner_distributions";
   } else {
     switch (section) {
@@ -352,8 +400,6 @@ export function parseBSMonthly(args: {
       if (!hasData) { subsection = newSubsection; continue; }
     }
 
-    // v10 Bug R: subtotal that ends the current subsection's scope resets
-    // subsection so the next leaves don't inherit it.
     if (subsection !== null) {
       const tLow = label.trim().toLowerCase();
       const SUBTOTAL_RESETS: Record<string, string[]> = {
@@ -363,14 +409,7 @@ export function parseBSMonthly(args: {
         inventory: ["total inventory"],
         accounts_receivable: ["total accounts receivable", "total a/r"],
         accounts_payable: ["total accounts payable", "total a/p"],
-        distributions: [
-          "total distributions",
-          "total shareholder distributions",
-          "total member distributions",
-          "total owner distributions",
-          "total members distributions",
-          "total owners distributions",
-        ],
+        distributions: ["total distributions", "total shareholder distributions", "total member distributions", "total owner distributions", "total members distributions", "total owners distributions"],
       };
       const matches = SUBTOTAL_RESETS[subsection] ?? [];
       if (matches.includes(tLow)) { subsection = null; continue; }
@@ -444,8 +483,6 @@ export function parseBSColumnar(args: {
       if (!hasData) { subsection = newSubsection; continue; }
     }
 
-    // v10 Bug R: subtotal that ends the current subsection's scope resets
-    // subsection so the next leaves don't inherit it.
     if (subsection !== null) {
       const tLow = label.trim().toLowerCase();
       const SUBTOTAL_RESETS: Record<string, string[]> = {
@@ -455,14 +492,7 @@ export function parseBSColumnar(args: {
         inventory: ["total inventory"],
         accounts_receivable: ["total accounts receivable", "total a/r"],
         accounts_payable: ["total accounts payable", "total a/p"],
-        distributions: [
-          "total distributions",
-          "total shareholder distributions",
-          "total member distributions",
-          "total owner distributions",
-          "total members distributions",
-          "total owners distributions",
-        ],
+        distributions: ["total distributions", "total shareholder distributions", "total member distributions", "total owner distributions", "total members distributions", "total owners distributions"],
       };
       const matches = SUBTOTAL_RESETS[subsection] ?? [];
       if (matches.includes(tLow)) { subsection = null; continue; }
