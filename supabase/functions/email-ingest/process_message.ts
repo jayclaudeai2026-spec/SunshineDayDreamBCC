@@ -1,7 +1,8 @@
-// process_message v8 (2026-06-18):
+// process_message v10 (2026-06-18):
 //   - v7: receipt sending gated by sendReceipts flag (default false).
 //   - v8: only pass ingestable (CSV/XLSX/XLS) attachments to identifyEntity. No fallback to allAttachments — prevents inline signature images from triggering false-positive filename_pattern matches.
 //   - v9: no changes to this file; period parsing now handles MM/DD/YYYY (see _shared/template.ts).
+//   - v10 (this rev): unwrap() now handles both "data" and "response_data" Composio v3 envelopes. The previous version only peeled "data", which composio.ts already strips at the execute() layer; the v3 inner envelope is "response_data", which leaked through and caused GMAIL_CREATE_EMAIL_DRAFT responses to look like { response_data: { id, message: {...} } } at the call site — draftR.id was undefined and the code threw "no draft id" despite drafts being created successfully in Gmail. Symptom on 2026-06-18 Gate 1 poll: 8 orphan drafts in Drafts folder, 8 failed email_send_log rows, no actual receipts delivered. Manual GMAIL_SEND_DRAFT calls recovered them. This patch makes the same unwrap-tolerant for the draftResp / verifyResp / sentResp shapes so future polls work end-to-end.
 
 import type { SupabaseClient } from "./_shared/supabase.ts";
 import { ComposioClient, ComposioError } from "./_shared/composio.ts";
@@ -408,10 +409,18 @@ async function sendReceipt(args: {
   }
 }
 
+// v10 patch: also peel "response_data" wrapper (Composio v3 inner envelope).
+// composio.ts execute() strips the outer "data" already; the residual
+// wrapper for tools like GMAIL_CREATE_EMAIL_DRAFT is "response_data".
 function unwrap(resp: unknown): unknown {
-  if (resp && typeof resp === "object" && "data" in resp) {
-    const inner = (resp as Record<string, unknown>).data;
-    if (inner && typeof inner === "object") return inner;
+  if (resp && typeof resp === "object") {
+    const obj = resp as Record<string, unknown>;
+    for (const key of ["data", "response_data"] as const) {
+      const inner = obj[key];
+      if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+        return inner;
+      }
+    }
   }
   return resp;
 }

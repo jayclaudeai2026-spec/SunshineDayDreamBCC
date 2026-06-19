@@ -1,5 +1,8 @@
 // Google Drive helpers: idempotent folder resolution + file upload via s3key.
 
+// Google Drive helpers — 2026-06-19: unwrap() patched to also peel
+// "response_data" Composio v3 envelope (mirrors process_message.ts v10).
+
 import type { ComposioClient } from "./composio.ts";
 import type { SupabaseClient } from "./supabase.ts";
 
@@ -152,10 +155,21 @@ export async function uploadFileToFolder(
   return id;
 }
 
+// 2026-06-18: defensive — also peel "response_data" wrapper (Composio v3
+// inner envelope). composio.ts execute() strips the outer "data" already;
+// the residual wrapper for some v3 tools is "response_data". Applied as a
+// guard before any of the gmail.ts call sites surface the bug — currently
+// none of the GMAIL_* tools used here have been observed returning that
+// envelope shape, but the patch mirrors process_message.ts unwrap() (v10).
 function unwrap(resp: unknown): unknown {
-  if (resp && typeof resp === "object" && "data" in resp) {
-    const inner = (resp as Record<string, unknown>).data;
-    if (inner && typeof inner === "object") return inner;
+  if (resp && typeof resp === "object") {
+    const obj = resp as Record<string, unknown>;
+    for (const key of ["data", "response_data"] as const) {
+      const inner = obj[key];
+      if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+        return inner;
+      }
+    }
   }
   return resp;
 }
