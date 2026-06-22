@@ -1,37 +1,34 @@
--- Recipe seed: monthly_close_request_email
--- Cadence: 25th of each month, 14:00 UTC (10am ET)
--- Purpose: emails the entity's bookkeeper a close-package request listing
---          the CSV exports needed for the just-ending month. Pulls from
---          public.email_templates ('bookkeeper_monthly_request') with
---          {{ entity_short_name }} and {{ period_label }} placeholders.
+-- Recipe seed 04: monthly_close_request_email
+-- ---------------------------------------------------------------------------
+-- INTERNAL handler (since runner v5/v5.1) that sends ONE consolidated email
+-- to the bookkeeper on the 25th of each month listing all active entities
+-- for prior-period close packages. The handler reads recipe.input_config:
+--   target_email (string, optional) — overrides client_context.bookkeeper_email.
+--                                     Used during smoke testing to route to the
+--                                     owner before going live to Rebecca.
+--
+-- To route live to Rebecca: UPDATE input_config = '{}' (or drop target_email
+-- key). To route to owner inbox: set target_email to jayclaudeai2026@gmail.com.
+--
+-- Activate: is_active=TRUE. Deactivate (Jay flagged Rebecca delivers without
+-- prompts): is_active=FALSE — handler code stays intact for potential future use.
 
 INSERT INTO public.automation_recipes (
-  recipe_key, name, description, category, recipe_type, input_config,
-  is_active, is_internal, schedule_cron, notes
-) VALUES (
+  recipe_key, recipe_type, schedule_cron, is_active, input_config, description
+)
+VALUES (
   'monthly_close_request_email',
-  'Monthly Close Package Request Email',
-  'On the 25th of each month, emails the bookkeeper a request for the monthly close package (P&L, BS, GL, bank/CC statements, payroll, sales tax). One email per entity. Uses email_templates row "bookkeeper_monthly_request".',
-  'communication',
-  'COMPOSIO:step_chain',
-  '{
-    "steps": [
-      {
-        "label": "list_entities_with_bookkeeper",
-        "tool": "DUMMY_INLINE",
-        "_note": "This recipe is a placeholder template. Real implementation queries entities + email_sender_map to find each entity bookkeeper, then loops a GMAIL_CREATE_EMAIL_DRAFT step per entity. Replace with full per-client logic at install time."
-      }
-    ]
-  }'::jsonb,
-  FALSE,
-  FALSE,
-  '0 14 25 * *',
-  'DISABLED at seed-time. Install playbook activates this recipe and writes the per-entity bookkeeper email loop using actual entity + email_sender_map data. See HANDOFF_PROMPTS.md monthly_close_request section.'
+  'INTERNAL:send_monthly_close_request_email',
+  '0 14 25 * *',           -- 25th of each month, 14:00 UTC
+  FALSE,                   -- activate after confirming bookkeeper expects the cadence
+  jsonb_build_object(
+    'target_email', 'jayclaudeai2026@gmail.com'  -- smoke-test override; clear to route to bookkeeper
+  ),
+  'Sends one consolidated monthly close request email to the bookkeeper listing all active entities for the prior-month package.'
 )
 ON CONFLICT (recipe_key) DO UPDATE SET
-  name = EXCLUDED.name,
-  description = EXCLUDED.description,
-  recipe_type = EXCLUDED.recipe_type,
+  recipe_type   = EXCLUDED.recipe_type,
   schedule_cron = EXCLUDED.schedule_cron,
-  notes = EXCLUDED.notes,
-  updated_at = NOW();
+  input_config  = EXCLUDED.input_config,
+  description   = EXCLUDED.description,
+  updated_at    = now();
