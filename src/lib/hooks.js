@@ -153,3 +153,43 @@ export function useAuthUser() {
 
   return { user, loading };
 }
+
+/**
+ * useMyModuleAccess — returns the current user's module access info from
+ * the public.get_my_module_access() RPC.
+ *
+ * Shape: { data: { user_id, is_owner, modules: string[] }, loading, error, refetch }
+ *
+ * Modules is the list of module_keys the user is allowed to navigate to.
+ * Owners always see all active modules.
+ */
+export function useMyModuleAccess() {
+  return useSupabaseQuery(
+    () => supabase.rpc('get_my_module_access'),
+    [],
+  );
+}
+
+/**
+ * useBccModules — returns the reference list of modules (for the admin UI).
+ */
+export function useBccModules() {
+  return useSupabaseQuery(
+    () => supabase.from('bcc_modules').select('*').eq('is_active', true).order('sort_order', { ascending: true }),
+    [],
+  );
+}
+
+/**
+ * useTeamMembers — owner-only. Returns the full team with their access matrix.
+ * Errors with permission denied for non-owners.
+ *
+ * Shape: array of { user_id, email, display_name, is_owner, last_sign_in_at, created_at, modules }
+ * where `modules` is an object mapping module_key -> bool.
+ */
+export function useTeamMembers() {
+  return useSupabaseQuery(
+    () => supabase.rpc('list_team_members'),
+    [],
+  );
+}

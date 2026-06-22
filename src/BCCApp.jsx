@@ -1,57 +1,67 @@
 // Main BCC app shell.
-// - Sidebar nav lists the 11 modules
+// - Auth gate: not signed in -> SignInGate (Supabase email+password)
+// - Module access gate: signed in -> calls get_my_module_access() RPC and
+//   filters NAV + gates routes accordingly. Owners see everything; staff see
+//   only the modules the owner has granted.
+// - Sidebar nav lists the modules the current user can access
 // - Top bar shows entity name and any urgent alerts pill
 // - <Outlet> via routes loads the active module
-// - Auth gate: if not signed in (and not in demo mode), show the sign-in
-//   form which calls supabase.auth.signInWithPassword.
 
-import { useState } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { useState, useMemo } from 'react';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, BarChart3, FileText, Brain, Workflow,
   Bell, Settings as SettingsIcon, ListChecks,
-  Megaphone, Users, Receipt,
+  Megaphone, Users, Receipt, ShieldCheck,
 } from 'lucide-react';
 
 import NavItem from './components/NavItem.jsx';
 import DemoBanner from './components/DemoBanner.jsx';
 import LoadingState from './components/LoadingState.jsx';
-import { useAuthUser, useClientContext, useUnresolvedAlerts } from './lib/hooks.js';
+import EmptyState from './components/EmptyState.jsx';
+import {
+  useAuthUser, useClientContext, useUnresolvedAlerts, useMyModuleAccess,
+} from './lib/hooks.js';
 import { DEMO_MODE, supabase } from './lib/supabase.js';
 import { cn } from './lib/utils.js';
 
-// Module imports — placeholders for now. Real implementations land in
-// follow-up commits (3 modules per commit).
-import Dashboard          from './modules/Dashboard.jsx';
-import Financials         from './modules/Financials.jsx';
-import Documents          from './modules/Documents.jsx';
-import PersistentMemory   from './modules/PersistentMemory.jsx';
-import Automations        from './modules/Automations.jsx';
+// Module imports
+import Dashboard           from './modules/Dashboard.jsx';
+import Financials          from './modules/Financials.jsx';
+import Documents           from './modules/Documents.jsx';
+import PersistentMemory    from './modules/PersistentMemory.jsx';
+import Automations         from './modules/Automations.jsx';
 import AlertsNotifications from './modules/AlertsNotifications.jsx';
-import Settings           from './modules/Settings.jsx';
-import TasksGoals         from './modules/TasksGoals.jsx';
-import SocialMedia        from './modules/SocialMedia.jsx';
-import HRPeople           from './modules/HRPeople.jsx';
-import TaxCenter          from './modules/TaxCenter.jsx';
+import Settings            from './modules/Settings.jsx';
+import TasksGoals          from './modules/TasksGoals.jsx';
+import SocialMedia         from './modules/SocialMedia.jsx';
+import HRPeople            from './modules/HRPeople.jsx';
+import TaxCenter           from './modules/TaxCenter.jsx';
+import TeamAccess          from './modules/TeamAccess.jsx';
 
+// NAV entries. `key` matches public.bcc_modules.module_key so we can filter
+// based on the get_my_module_access() RPC response. `ownerOnly` forces the
+// entry to only appear for owners regardless of grants (Team & Access).
 const NAV = [
-  { to: '/',            end: true,  label: 'Dashboard',         icon: LayoutDashboard },
-  { to: '/financials',              label: 'Financials',        icon: BarChart3 },
-  { to: '/documents',               label: 'Documents',         icon: FileText },
-  { to: '/memory',                  label: 'Memory',            icon: Brain },
-  { to: '/automations',             label: 'Automations',       icon: Workflow },
-  { to: '/alerts',                  label: 'Alerts',            icon: Bell },
-  { to: '/tasks',                   label: 'Tasks & Goals',     icon: ListChecks },
-  { to: '/social',                  label: 'Social Media',      icon: Megaphone },
-  { to: '/hr',                      label: 'HR / People',       icon: Users },
-  { to: '/tax',                     label: 'Tax Center',        icon: Receipt },
-  { to: '/settings',                label: 'Settings',          icon: SettingsIcon },
+  { key: 'dashboard',   to: '/',             end: true,  label: 'Dashboard',     icon: LayoutDashboard },
+  { key: 'financials',  to: '/financials',                label: 'Financials',    icon: BarChart3 },
+  { key: 'documents',   to: '/documents',                 label: 'Documents',     icon: FileText },
+  { key: 'memory',      to: '/memory',                    label: 'Memory',        icon: Brain },
+  { key: 'automations', to: '/automations',               label: 'Automations',   icon: Workflow },
+  { key: 'alerts',      to: '/alerts',                    label: 'Alerts',        icon: Bell },
+  { key: 'tasks',       to: '/tasks',                     label: 'Tasks & Goals', icon: ListChecks },
+  { key: 'social',      to: '/social',                    label: 'Social Media',  icon: Megaphone },
+  { key: 'hr',          to: '/hr',                        label: 'HR / People',   icon: Users },
+  { key: 'tax',         to: '/tax',                       label: 'Tax Center',    icon: Receipt },
+  { key: 'settings',    to: '/settings',                  label: 'Settings',      icon: SettingsIcon },
+  { key: 'team',        to: '/team',                      label: 'Team & Access', icon: ShieldCheck, ownerOnly: true },
 ];
 
 export default function BCCApp() {
   const { user, loading: authLoading } = useAuthUser();
   const { data: ctx } = useClientContext();
   const { data: alerts } = useUnresolvedAlerts({ limit: 5 });
+  const { data: access, loading: accessLoading } = useMyModuleAccess();
 
   if (authLoading) {
     return <LoadingState fullscreen label="Initializing BCC…" />;
@@ -60,6 +70,24 @@ export default function BCCApp() {
   if (!user && !DEMO_MODE) {
     return <SignInGate />;
   }
+
+  // Demo mode and signed-in users wait for the access RPC to resolve so
+  // we don't briefly flash the full nav before filtering.
+  if (!DEMO_MODE && accessLoading) {
+    return <LoadingState fullscreen label="Checking access…" />;
+  }
+
+  const isOwner    = DEMO_MODE ? true : Boolean(access?.is_owner);
+  const allowedSet = useMemo(() => {
+    if (DEMO_MODE) return new Set(NAV.map((n) => n.key));
+    if (isOwner)   return new Set(NAV.map((n) => n.key));
+    return new Set(Array.isArray(access?.modules) ? access.modules : []);
+  }, [access, isOwner]);
+
+  const visibleNav = NAV.filter((n) => {
+    if (n.ownerOnly && !isOwner) return false;
+    return allowedSet.has(n.key);
+  });
 
   const clientName = ctx?.display_name ?? 'Sunshine Daydream BCC';
   const alertCount = alerts?.length ?? 0;
@@ -79,14 +107,16 @@ export default function BCCApp() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            {alertCount > 0 && (
+            {allowedSet.has('alerts') && alertCount > 0 && (
               <a href="/alerts" className="ia-pill-danger no-underline" title={`${alertCount} unresolved alerts`}>
                 <Bell size={12} className="inline mr-1" />
                 {alertCount} alert{alertCount === 1 ? '' : 's'}
               </a>
             )}
             {user?.email && (
-              <span className="text-xs text-ia-muted hidden sm:inline">{user.email}</span>
+              <span className="text-xs text-ia-muted hidden sm:inline">
+                {user.email}{isOwner ? ' · owner' : ''}
+              </span>
             )}
             {user && (
               <button
@@ -103,25 +133,32 @@ export default function BCCApp() {
       <div className="flex-1 max-w-7xl mx-auto w-full px-4 py-6 flex gap-6">
         <aside className="w-56 flex-shrink-0">
           <nav className="space-y-1 sticky top-6">
-            {NAV.map((item) => (
-              <NavItem key={item.to} {...item} />
-            ))}
+            {visibleNav.length === 0 ? (
+              <div className="text-xs text-ia-muted px-3 py-2">
+                No modules granted yet. Ask the owner to grant you access.
+              </div>
+            ) : (
+              visibleNav.map((item) => (
+                <NavItem key={item.to} {...item} />
+              ))
+            )}
           </nav>
         </aside>
         <main className="flex-1 min-w-0">
           <Routes>
-            <Route path="/"             element={<Dashboard />} />
-            <Route path="/financials/*" element={<Financials />} />
-            <Route path="/documents/*"  element={<Documents />} />
-            <Route path="/memory/*"     element={<PersistentMemory />} />
-            <Route path="/automations/*" element={<Automations />} />
-            <Route path="/alerts"       element={<AlertsNotifications />} />
-            <Route path="/tasks"        element={<TasksGoals />} />
-            <Route path="/social/*"     element={<SocialMedia />} />
-            <Route path="/hr/*"         element={<HRPeople />} />
-            <Route path="/tax/*"        element={<TaxCenter />} />
-            <Route path="/settings/*"   element={<Settings />} />
-            <Route path="*"             element={<Navigate to="/" replace />} />
+            <Route path="/"             element={<GateRoute moduleKey="dashboard"   allowedSet={allowedSet}><Dashboard /></GateRoute>} />
+            <Route path="/financials/*" element={<GateRoute moduleKey="financials"  allowedSet={allowedSet}><Financials /></GateRoute>} />
+            <Route path="/documents/*"  element={<GateRoute moduleKey="documents"   allowedSet={allowedSet}><Documents /></GateRoute>} />
+            <Route path="/memory/*"     element={<GateRoute moduleKey="memory"      allowedSet={allowedSet}><PersistentMemory /></GateRoute>} />
+            <Route path="/automations/*" element={<GateRoute moduleKey="automations" allowedSet={allowedSet}><Automations /></GateRoute>} />
+            <Route path="/alerts"       element={<GateRoute moduleKey="alerts"      allowedSet={allowedSet}><AlertsNotifications /></GateRoute>} />
+            <Route path="/tasks"        element={<GateRoute moduleKey="tasks"       allowedSet={allowedSet}><TasksGoals /></GateRoute>} />
+            <Route path="/social/*"     element={<GateRoute moduleKey="social"      allowedSet={allowedSet}><SocialMedia /></GateRoute>} />
+            <Route path="/hr/*"         element={<GateRoute moduleKey="hr"          allowedSet={allowedSet}><HRPeople /></GateRoute>} />
+            <Route path="/tax/*"        element={<GateRoute moduleKey="tax"         allowedSet={allowedSet}><TaxCenter /></GateRoute>} />
+            <Route path="/settings/*"   element={<GateRoute moduleKey="settings"    allowedSet={allowedSet}><Settings /></GateRoute>} />
+            <Route path="/team/*"       element={isOwner ? <TeamAccess /> : <Navigate to="/" replace />} />
+            <Route path="*"             element={<Navigate to={visibleNav[0]?.to ?? '/'} replace />} />
           </Routes>
         </main>
       </div>
@@ -136,9 +173,23 @@ export default function BCCApp() {
   );
 }
 
-// ----- Real Supabase email/password sign-in --------------------------------
-// Calls supabase.auth.signInWithPassword. useAuthUser subscribes to
-// onAuthStateChange, so a successful sign-in re-renders BCCApp automatically.
+// Route gate: if the user is not allowed to view `moduleKey`, show a friendly
+// no-access message rather than the module content. Keeps direct URL navigation
+// in check.
+function GateRoute({ moduleKey, allowedSet, children }) {
+  const location = useLocation();
+  if (!allowedSet.has(moduleKey)) {
+    return (
+      <EmptyState
+        title="No access to this module"
+        description={`You don't have access to ${moduleKey}. Ask the owner to grant you access from Team & Access.`}
+      />
+    );
+  }
+  return children;
+}
+
+// ----- Supabase email/password sign-in -------------------------------------
 function SignInGate() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -155,7 +206,6 @@ function SignInGate() {
         password,
       });
       if (signInError) throw signInError;
-      // success: useAuthUser handles re-render via onAuthStateChange.
     } catch (err) {
       console.error('sign-in error:', err);
       setError(err?.message ?? 'Sign-in failed. Check your credentials and try again.');
@@ -242,8 +292,8 @@ function SignInGate() {
         </form>
 
         <p className="mt-4 text-xs text-ia-muted text-center">
-          Need an account? Ask your admin to invite you via the Supabase dashboard
-          (Authentication → Users).
+          Need an account? Ask the owner to add you via the Supabase dashboard
+          (Authentication → Users), then grant you module access from Team &amp; Access.
         </p>
       </div>
     </div>
