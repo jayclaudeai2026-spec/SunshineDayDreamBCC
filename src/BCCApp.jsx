@@ -63,6 +63,17 @@ export default function BCCApp() {
   const { data: alerts } = useUnresolvedAlerts({ limit: 5 });
   const { data: access, loading: accessLoading } = useMyModuleAccess();
 
+  // IMPORTANT: derived hook values must be declared BEFORE any conditional
+  // returns below to obey the Rules of Hooks (otherwise React throws #310
+  // "Rendered more hooks than during the previous render" when authLoading
+  // flips from true to false on subsequent renders).
+  const isOwner    = DEMO_MODE ? true : Boolean(access?.is_owner);
+  const allowedSet = useMemo(() => {
+    if (DEMO_MODE) return new Set(NAV.map((n) => n.key));
+    if (isOwner)   return new Set(NAV.map((n) => n.key));
+    return new Set(Array.isArray(access?.modules) ? access.modules : []);
+  }, [access, isOwner]);
+
   if (authLoading) {
     return <LoadingState fullscreen label="Initializing BCC…" />;
   }
@@ -76,13 +87,6 @@ export default function BCCApp() {
   if (!DEMO_MODE && accessLoading) {
     return <LoadingState fullscreen label="Checking access…" />;
   }
-
-  const isOwner    = DEMO_MODE ? true : Boolean(access?.is_owner);
-  const allowedSet = useMemo(() => {
-    if (DEMO_MODE) return new Set(NAV.map((n) => n.key));
-    if (isOwner)   return new Set(NAV.map((n) => n.key));
-    return new Set(Array.isArray(access?.modules) ? access.modules : []);
-  }, [access, isOwner]);
 
   const visibleNav = NAV.filter((n) => {
     if (n.ownerOnly && !isOwner) return false;
