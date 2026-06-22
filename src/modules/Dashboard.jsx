@@ -1,9 +1,13 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Activity, AlertTriangle, CheckCircle2, Clock, DollarSign,
-  Receipt, RefreshCw, Workflow,
+  Activity, AlertTriangle, CheckCircle2, Clock, DollarSign, TrendingUp, TrendingDown,
+  Receipt, RefreshCw, Workflow, Wallet, ListChecks, Bell,
 } from 'lucide-react';
+import {
+  ResponsiveContainer, LineChart, Line, Tooltip, XAxis, YAxis, CartesianGrid,
+  ReferenceLine,
+} from 'recharts';
 
 import StatCard from '../components/StatCard.jsx';
 import SectionHeader from '../components/SectionHeader.jsx';
@@ -11,16 +15,59 @@ import LoadingState from '../components/LoadingState.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import { supabase } from '../lib/supabase.js';
 import {
-  useSystemStatus, useUnresolvedAlerts, useSupabaseQuery, useEntities,
+  useSystemStatus, useUnresolvedAlerts, useSupabaseQuery,
 } from '../lib/hooks.js';
 import {
-  fmtRelative, fmtDate, fmtCurrency, cn, healthPillClass, severityPillClass, truncate,
+  fmtRelative, fmtDate, fmtCurrency, fmtPct, fmtMonth, cn,
+  healthPillClass, severityPillClass, truncate,
 } from '../lib/utils.js';
 
 export default function Dashboard() {
-  const { data: status, loading: statusLoading, refetch: refetchStatus } = useSystemStatus();
+  // -------------------------------------------------------------------------
+  // BUSINESS KPIs (top of fold — what the owner cares about)
+  // -------------------------------------------------------------------------
+  const { data: kpiRow, loading: kpiLoading } = useSupabaseQuery(
+    () => supabase.from('dashboard_business_kpis_view').select('*').maybeSingle(),
+    [],
+  );
+  const kpi = kpiRow ?? null;
+
+  // 12-month trailing chart — only include months with >=8 entities reporting
+  // so partial-coverage months don't drag the line to zero.
+  const { data: monthlyRows } = useSupabaseQuery(
+    () => supabase
+      .from('group_monthly_summary_view')
+      .select('period, group_revenue, group_net_income, entities_reporting')
+      .gte('entities_reporting', 8)
+      .order('period', { ascending: false })
+      .limit(12),
+    [],
+  );
+
+  const chartData = useMemo(() => {
+    if (!monthlyRows) return [];
+    return [...monthlyRows]
+      .reverse()
+      .map((r) => ({
+        period: fmtMonth(r.period),
+        revenue: Number(r.group_revenue ?? 0),
+        net_income: Number(r.group_net_income ?? 0),
+      }));
+  }, [monthlyRows]);
+
+  // Revenue MoM delta
+  const revenueMomPct = useMemo(() => {
+    if (!kpi?.latest_revenue || !kpi?.prev_revenue) return null;
+    const prev = Number(kpi.prev_revenue);
+    if (prev === 0) return null;
+    return ((Number(kpi.latest_revenue) - prev) / Math.abs(prev)) * 100;
+  }, [kpi]);
+
+  // -------------------------------------------------------------------------
+  // Operational data (lower priority — system health, alerts, etc.)
+  // -------------------------------------------------------------------------
+  const { data: status, refetch: refetchStatus } = useSystemStatus();
   const { data: alerts } = useUnresolvedAlerts({ limit: 5 });
-  const { data: entities } = useEntities();
 
   const { data: recentRuns } = useSupabaseQuery(
     () => supabase
@@ -59,7 +106,7 @@ export default function Dashboard() {
 
   // Pipeline health signal counts
   const pipelineCounts = useMemo(() => {
-    const counts = { healthy: 0, degraded: 0, unhealthy: 0, attention: 0 };
+    const counts = { healthy: 0, attention: 0 };
     (pipelineHealth ?? []).forEach((r) => {
       if (r.health_signal === 'healthy') counts.healthy++;
       else counts.attention++;
@@ -67,13 +114,24 @@ export default function Dashboard() {
     return counts;
   }, [pipelineHealth]);
 
+  // Alert severity breakdown
+  const alertBreakdown = useMemo(() => {
+    const counts = { critical: 0, warning: 0, info: 0 };
+    (alerts ?? []).forEach((a) => {
+      if (counts[a.severity] != null) counts[a.severity]++;
+    });
+    return counts;
+  }, [alerts]);
+
   return (
     <section className="space-y-6">
       <header className="flex items-end justify-between">
         <div>
           <h1>Dashboard</h1>
           <p className="text-sm text-ia-muted mt-1">
-            At-a-glance health, recent activity, and what needs your attention.
+            {kpi?.latest_full_period
+              ? `Group performance through ${fmtMonth(kpi.latest_full_period)} · ${kpi.latest_entities_reporting ?? '—'} of 12 entities reporting`
+              : 'Group performance and operational health'}
           </p>
         </div>
         <button
@@ -86,7 +144,104 @@ export default function Dashboard() {
         </button>
       </header>
 
-      {/* Stat strip */}
+      {/* ---------------------------------------------------------------- */}
+      {/* BUSINESS KPI STRIP                                                */}
+      {/* ---------------------------------------------------------------- */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatCard
+          label={`Revenue · ${kpi?.latest_full_period ? fmtMonth(kpi.latest_full_period) : '—'}`}
+          value={fmtCurrency(kpi?.latest_revenue, { abbreviate: true })}
+          sublabel={
+            revenueMomPct != null
+              ? `${revenueMomPct >= 0 ? '↑' : '↓'} ${Math.abs(revenueMomPct).toFixed(1)}% vs ${kpi?.prev_full_period ? fmtMonth(kpi.prev_full_period) : 'prior'}`
+              : `TTM ${fmtCurrency(kpi?.ttm_revenue, { abbreviate: true })}`
+          }
+          tone={revenueMomPct != null && revenueMomPct >= 0 ? 'positive' : 'neutral'}
+          icon={revenueMomPct != null && revenueMomPct >= 0 ? TrendingUp : TrendingDown}
+          loading={kpiLoading}
+        />
+        <StatCard
+          label="Cash on hand"
+          value={fmtCurrency(kpi?.total_cash, { abbreviate: true })}
+          sublabel={`AR ${fmtCurrency(kpi?.total_ar, { abbreviate: true })} · AP ${fmtCurrency(kpi?.total_ap, { abbreviate: true })}`}
+          icon={Wallet}
+          loading={kpiLoading}
+        />
+        <StatCard
+          label={`Net income · ${kpi?.latest_full_period ? fmtMonth(kpi.latest_full_period) : '—'}`}
+          value={fmtCurrency(kpi?.latest_net_income, { abbreviate: true })}
+          sublabel={
+            kpi?.latest_net_margin_pct != null
+              ? `${kpi.latest_net_margin_pct >= 0 ? '+' : ''}${Number(kpi.latest_net_margin_pct).toFixed(1)}% margin · TTM ${fmtCurrency(kpi?.ttm_net_income, { abbreviate: true })}`
+              : '—'
+          }
+          tone={Number(kpi?.latest_net_income ?? 0) >= 0 ? 'positive' : 'danger'}
+          icon={DollarSign}
+          loading={kpiLoading}
+        />
+        <StatCard
+          label="Working capital"
+          value={fmtCurrency(kpi?.total_working_capital, { abbreviate: true })}
+          sublabel={`Inventory ${fmtCurrency(kpi?.total_inventory, { abbreviate: true })}`}
+          tone={Number(kpi?.total_working_capital ?? 0) >= 0 ? 'neutral' : 'danger'}
+          icon={Activity}
+          loading={kpiLoading}
+        />
+      </div>
+
+      {/* ---------------------------------------------------------------- */}
+      {/* TRAILING 12-MONTH PERFORMANCE CHART                              */}
+      {/* ---------------------------------------------------------------- */}
+      <div className="ia-card">
+        <SectionHeader
+          title="Group monthly performance"
+          description={
+            kpi?.last_data_received_at
+              ? `Trailing ${chartData.length} months · last data received ${fmtRelative(kpi.last_data_received_at)}`
+              : `Trailing ${chartData.length} months`
+          }
+          actions={
+            <Link to="/financials" className="ia-button-ghost text-xs">
+              <DollarSign size={12} /><span>Financials</span>
+            </Link>
+          }
+        />
+        {chartData.length === 0 ? (
+          <LoadingState />
+        ) : (
+          <div style={{ width: '100%', height: 240 }}>
+            <ResponsiveContainer>
+              <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                <YAxis
+                  tick={{ fontSize: 11 }}
+                  tickFormatter={(v) => fmtCurrency(v, { abbreviate: true })}
+                  width={60}
+                />
+                <Tooltip
+                  formatter={(value) => fmtCurrency(value)}
+                  labelStyle={{ fontSize: 12, fontWeight: 600 }}
+                  contentStyle={{ fontSize: 12, borderRadius: 6 }}
+                />
+                <ReferenceLine y={0} stroke="#9ca3af" strokeDasharray="2 2" />
+                <Line
+                  type="monotone" dataKey="revenue" name="Revenue"
+                  stroke="#0d9488" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }}
+                />
+                <Line
+                  type="monotone" dataKey="net_income" name="Net income"
+                  stroke="#1e3a5f" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+
+      {/* ---------------------------------------------------------------- */}
+      {/* OPERATIONS STRIP (compact — system health + small counts)         */}
+      {/* ---------------------------------------------------------------- */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard
           label="System health"
@@ -99,73 +254,46 @@ export default function Dashboard() {
             ? `checked ${fmtRelative(status.last_health_check_at)}`
             : '—'}
           icon={Activity}
-          loading={statusLoading}
         />
         <StatCard
-          label="Active entities"
-          value={status?.active_entities_count ?? entities?.length ?? '—'}
-          sublabel={`${entities?.length ?? 0} on file`}
-          icon={DollarSign}
-          loading={statusLoading}
+          label="Unresolved alerts"
+          value={alerts?.length ?? 0}
+          sublabel={
+            alerts?.length
+              ? [
+                  alertBreakdown.critical && `${alertBreakdown.critical} critical`,
+                  alertBreakdown.warning && `${alertBreakdown.warning} warning`,
+                  alertBreakdown.info && `${alertBreakdown.info} info`,
+                ].filter(Boolean).join(' · ') || 'all clear'
+              : 'all clear'
+          }
+          tone={alertBreakdown.critical > 0 ? 'danger' : alertBreakdown.warning > 0 ? 'warning' : 'neutral'}
+          icon={Bell}
         />
         <StatCard
-          label="Last ingest"
-          value={status?.last_email_ingest_at ? fmtRelative(status.last_email_ingest_at) : 'never'}
-          sublabel={status?.parser_pending_count
-            ? `${status.parser_pending_count} pending`
-            : 'no pending'}
-          tone={status?.parser_pending_count > 5 ? 'warning' : 'neutral'}
-          icon={Clock}
-          loading={statusLoading}
+          label="Open closes"
+          value={openCloses?.length ?? 0}
+          sublabel={
+            openCloses?.length
+              ? `${openCloses.filter((c) => c.status === 'blocked').length} blocked · ${openCloses.filter((c) => c.status === 'in_progress').length} in progress`
+              : 'none open'
+          }
+          tone={openCloses?.length ? 'warning' : 'neutral'}
+          icon={ListChecks}
         />
         <StatCard
-          label="Alerts (24h failures)"
+          label="Automation health"
           value={status?.automation_failed_24h ?? 0}
-          sublabel={alerts?.length ? `${alerts.length} unresolved alerts` : 'all resolved'}
+          sublabel={`failures in last 24h · last run ${status?.last_automation_run_at ? fmtRelative(status.last_automation_run_at) : '—'}`}
           tone={(status?.automation_failed_24h ?? 0) > 0 ? 'danger' : 'neutral'}
-          icon={AlertTriangle}
-          loading={statusLoading}
+          icon={Workflow}
         />
       </div>
 
-      {/* Two-column body */}
+      {/* ---------------------------------------------------------------- */}
+      {/* TWO-COLUMN BODY: alerts + open closes, pipeline + tax            */}
+      {/* ---------------------------------------------------------------- */}
       <div className="grid lg:grid-cols-2 gap-6">
-        {/* Pipeline health */}
-        <div className="ia-card">
-          <SectionHeader
-            title="Ingest pipeline"
-            description={`${pipelineCounts.healthy} healthy, ${pipelineCounts.attention} need attention`}
-            actions={
-              <Link to="/automations" className="ia-button-ghost text-xs">
-                <Workflow size={12} /><span>Manage</span>
-              </Link>
-            }
-          />
-          {!pipelineHealth ? (
-            <LoadingState />
-          ) : pipelineHealth.length === 0 ? (
-            <EmptyState title="No entities yet" description="Add an entity in Settings to begin ingesting financial data." />
-          ) : (
-            <ul className="divide-y divide-ia-border">
-              {pipelineHealth.map((row) => (
-                <li key={row.entity_id} className="py-2 flex items-center justify-between">
-                  <div>
-                    <div className="font-medium text-sm text-ia-navy">{row.entity_short_name}</div>
-                    <div className="text-xs text-ia-muted">
-                      {row.last_ingest_received_at
-                        ? `last ingest ${fmtRelative(row.last_ingest_received_at)}`
-                        : 'no ingest yet'}
-                      {row.pending_count > 0 && ` · ${row.pending_count} pending`}
-                      {row.failed_count > 0 && ` · ${row.failed_count} failed`}
-                    </div>
-                  </div>
-                  <span className={healthPillClass(row.health_signal)}>{row.health_signal}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
         {/* Unresolved alerts */}
         <div className="ia-card">
           <SectionHeader
@@ -214,11 +342,11 @@ export default function Dashboard() {
               description="Close cycles open on the 1st of each month via the monthly_close_kickoff recipe."
             />
           ) : (
-            <ul className="divide-y divide-ia-border">
+            <ul className="divide-y divide-ia-border max-h-72 overflow-y-auto">
               {openCloses.map((c) => (
                 <li key={c.id} className="py-2 flex items-center justify-between">
-                  <div>
-                    <div className="font-medium text-sm text-ia-navy">
+                  <div className="min-w-0">
+                    <div className="font-medium text-sm text-ia-navy truncate">
                       {c.entity_short_name} · {fmtDate(c.period, 'MMM yyyy')}
                     </div>
                     <div className="text-xs text-ia-muted">
@@ -241,6 +369,42 @@ export default function Dashboard() {
                       {c.completion_pct ?? 0}%
                     </span>
                   </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* Ingest pipeline */}
+        <div className="ia-card">
+          <SectionHeader
+            title="Ingest pipeline"
+            description={`${pipelineCounts.healthy} healthy, ${pipelineCounts.attention} need attention`}
+            actions={
+              <Link to="/automations" className="ia-button-ghost text-xs">
+                <Workflow size={12} /><span>Manage</span>
+              </Link>
+            }
+          />
+          {!pipelineHealth ? (
+            <LoadingState />
+          ) : pipelineHealth.length === 0 ? (
+            <EmptyState title="No entities yet" description="Add an entity in Settings to begin ingesting financial data." />
+          ) : (
+            <ul className="divide-y divide-ia-border max-h-72 overflow-y-auto">
+              {pipelineHealth.map((row) => (
+                <li key={row.entity_id} className="py-2 flex items-center justify-between">
+                  <div>
+                    <div className="font-medium text-sm text-ia-navy">{row.entity_short_name}</div>
+                    <div className="text-xs text-ia-muted">
+                      {row.last_ingest_received_at
+                        ? `last ingest ${fmtRelative(row.last_ingest_received_at)}`
+                        : 'no ingest yet'}
+                      {row.pending_count > 0 && ` · ${row.pending_count} pending`}
+                      {row.failed_count > 0 && ` · ${row.failed_count} failed`}
+                    </div>
+                  </div>
+                  <span className={healthPillClass(row.health_signal)}>{row.health_signal}</span>
                 </li>
               ))}
             </ul>
