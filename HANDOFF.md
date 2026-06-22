@@ -5,7 +5,7 @@
 **Repo:** https://github.com/jayclaudeai2026-spec/SunshineDayDreamBCC
 **Supabase project:** `qlcwzlejluyluunjhtki` (us-east-2)
 **Intake email:** `jayclaudeai2026@gmail.com`
-**Last updated:** 2026-06-22
+**Last updated:** 2026-06-22 (Phase 13 ship)
 
 This is the durable operator handoff — what the BCC is, how it runs, how to add things to it, where to look when something breaks, and how to work with Claude in future sessions.
 
@@ -131,11 +131,12 @@ All three are `--no-verify-jwt`. They authenticate via webhook secrets stored in
 | Recipe                          | Type                                      | Cron            | Purpose |
 |---------------------------------|-------------------------------------------|-----------------|---------|
 | `system_status_refresh`         | INTERNAL:refresh_system_status            | `*/5 * * * *`   | Updates system_status row with ingest queue, automation failure counts, overall health |
+| `health_checks_daily`           | COMPOSIO:step_chain                       | `0 6 * * *`     | **Phase 13 support.** 1am Central: calls `run_health_checks()` which raises `system_alerts` rows for failure patterns (parse failures, ingest backlog, automation failures, stale alerts, overdue taxes). |
 | `daily_briefing_email`          | COMPOSIO:step_chain                       | `0 12 * * 1-5`  | Weekday 7am Central: Groq composes a briefing from `get_daily_briefing_context()` and emails it to the owner |
 | `tax_calendar_due_soon`         | INTERNAL:tax_calendar_due_soon            | `0 6 * * *`     | Flips tax_calendar status to `due_soon` when within the per-row lead window |
 | `tax_calendar_overdue`          | INTERNAL:tax_calendar_overdue             | `5 6 * * *`     | Flips status to `overdue` after due_date passes |
 | `monthly_close_kickoff`         | INTERNAL:open_close_period_all_entities   | `0 9 1 * * `    | 1st of month: opens a monthly_close_checklist row for each entity for the prior period |
-| `monthly_close_request_email`   | INTERNAL:send_monthly_close_request_email | `0 14 25 * *`   | **⚠️ Conflict with operator instruction** — see Section 13 |
+| `weekly_status_recap`           | COMPOSIO:step_chain                       | `0 22 * * 5`    | **Phase 13 support.** Friday 5pm Central: Groq composes a 3-paragraph weekly recap from `get_weekly_status_context()` and emails to the owner. |
 | `gl_entry_writer_generic`       | COMPOSIO:step_chain                       | (manual)        | On-demand GL entry writer; called by the parser |
 
 ### Active but inactive (awaits OAuth or activation)
@@ -274,15 +275,9 @@ To rotate: open Supabase Studio → Vault → edit the secret → no re-scheduli
 
 ## 13. Standing decisions to revisit
 
-### ⚠️ `monthly_close_request_email` is active
+### `monthly_close_request_email` — deactivated (2026-06-22)
 
-Live state: recipe `monthly_close_request_email` is `is_active=TRUE` with cron `0 14 25 * *` — it will send a Gmail message to `accounting@sunshinedaydream.com` on the 25th of every month asking Rebecca to send close packages for the prior period.
-
-Operator memory says **Rebecca delivers without prompts** and **the recipe was deactivated as unnecessary**. The live state diverges from that. **Decide before Jun 25:**
-- (a) Leave it active and let Rebecca get the friendly nudge each month, OR
-- (b) Deactivate via `UPDATE automation_recipes SET is_active=FALSE WHERE recipe_key='monthly_close_request_email';` and let the existing relationship run as-is.
-
-The recipe seed in the repo (`supabase/recipe_seeds/04_monthly_close_request_email.sql`) has `is_active=FALSE`, so option (b) brings repo + live into agreement.
+Recipe `monthly_close_request_email` was flipped to `is_active=FALSE` per owner decision on 2026-06-22. Rebecca delivers monthly packages without prompts; the recipe stays in place (handler + seed are intact) and can be reactivated by flipping `is_active=TRUE` if the relationship ever needs the nudge.
 
 ### Schema deviations (live vs repo)
 
@@ -353,7 +348,52 @@ The full operator prompt is the `userPreferences` block in the Claude project Cu
 | 7.0   | Document library              | ✅ complete    | 96 XLSX backfilled to Drive, ingest_log populated |
 | 8.0   | Web app deployment            | ✅ complete    | Multi-user invite + per-module access live |
 | 9.0   | Social media module           | 🟡 in progress | Seeded; awaits Jay OAuth for IG/FB |
-| 10.0  | HR module                     | 🟡 in progress | Payroll request drafted (Gmail draft `r-529098543084296208`) — Jay sends from drafts |
+| 10.0  | HR module                     | 🟡 in progress | Payroll request drafted (Gmail draft `r-529098543084296208`) — owner sends from Gmail drafts |
 | 11.0  | Automation library            | 🟡 in progress | 5 active recipes; expansion ongoing |
 | 12.0  | Handoff package               | ✅ complete    | This document |
-| 13.0  | Support window setup          | ⏳ pending     | Next |
+| 13.0  | Support window setup          | ✅ complete    | health_checks_daily + weekly_status_recap recipes live; this doc updated |
+---
+
+## 18. Support window (Phase 13)
+
+The BCC is now in continuous-support mode. There is no hard end date — the system runs on autopilot, with two recurring touchpoints that surface anything needing the owner's attention:
+
+### Automated touchpoints
+
+1. **Daily health checks** (`health_checks_daily`, 1am Central daily)
+   Scans the live state for five failure patterns and raises `system_alerts` rows:
+
+   | Check                    | Threshold                     | Severity   |
+   |--------------------------|-------------------------------|------------|
+   | Parser failures (24h)    | > 0                           | warning    |
+   | Ingest queue depth       | > 20 pending                  | warning    |
+   | Automation failures (24h)| > 3                           | warning    |
+   | Stale alerts             | warning/critical open >14d    | info       |
+   | Overdue tax filings      | overdue >3 days               | critical   |
+
+   Each pattern has a dedupe window (12h–24h depending on severity) so alerts don't pile up.
+
+2. **Weekly status recap** (`weekly_status_recap`, Friday 5pm Central)
+   Groq composes a 3-paragraph email summarizing the week: ingest activity vs prior week, what documents landed, the most important open alert, what's coming up. Different from the daily briefing — broader scope, retrospective, ends on one concrete 10-minute next action.
+
+### Escalation path
+
+When something goes wrong, in priority order:
+
+1. **Open the webapp → Alerts.** If `health_checks_daily` flagged the issue, the alert message will name the module to open next.
+2. **Pull up the Friday recap email.** It will reference any open alert by name with how long it has been open.
+3. **Open a fresh Claude session with the BCC project context.** The operator system prompt (in Claude project Custom Instructions) loads memory automatically. Describe the issue — Claude will pick up where the last session left off and either fix it directly via the Supabase/GitHub/Composio MCPs or surface what you need to do.
+
+### Watch-list for the next two weeks
+
+- Phase 10 (HR / People) payroll backfill from Rebecca — once she responds, parse + ingest the package, then start populating `employees` + `employee_entity_assignments`.
+- Phase 9 (Social) OAuth — when the brand IG/FB accounts are connected via Composio, flip the existing `social_accounts` rows to `is_active=TRUE` and activate the matching `social_schedule` rows.
+- April + May 2026 monthly packages for 10 of 12 entities (open alert id 15) — one-time ask to Rebecca recommended.
+
+### What to expect
+
+- The daily briefing arrives 7am Central weekdays.
+- The weekly recap arrives 5pm Central Fridays.
+- The health checker raises alerts overnight; check the Alerts module if anything in the briefing looks off.
+- The morning briefing already lists any open critical/warning alerts — if the briefing is calm, the system is calm.
+
