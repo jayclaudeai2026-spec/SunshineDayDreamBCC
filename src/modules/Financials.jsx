@@ -95,8 +95,12 @@ export default function Financials() {
   const latest = monthsData[monthsData.length - 1];
   const prior  = monthsData[monthsData.length - 2];
 
-  const latestRevenue = Number(latest?.revenue ?? 0) + Number(latest?.other_income ?? 0);
-  const priorRevenue  = Number(prior?.revenue  ?? 0) + Number(prior?.other_income  ?? 0);
+  // Canonical "Revenue" = monthly_pl.revenue (operating revenue). Other-income
+  // (interest, rebates, one-offs) is intentionally NOT folded in — that keeps
+  // this module consistent with group_monthly_summary_view, the Dashboard, and
+  // entity_year_over_year_view, all of which use bare revenue.
+  const latestRevenue = Number(latest?.revenue ?? 0);
+  const priorRevenue  = Number(prior?.revenue  ?? 0);
   const revenueTrend  = priorRevenue > 0
     ? ((latestRevenue - priorRevenue) / priorRevenue)
     : null;
@@ -230,7 +234,8 @@ export default function Financials() {
               </thead>
               <tbody>
                 {[...monthsData].reverse().map((m) => {
-                  const rev = Number(m.revenue ?? 0) + Number(m.other_income ?? 0);
+                  // Canonical Revenue (no other_income) — see comment above.
+                  const rev = Number(m.revenue ?? 0);
                   return (
                     <tr key={m.period}>
                       <td className="font-medium">{fmtMonth(m.period)}</td>
@@ -257,7 +262,7 @@ export default function Financials() {
         <div className="ia-card">
           <SectionHeader
             title="Year-over-year"
-            description="Annual rollup with YoY change"
+            description="Annual rollup with YoY change. Partial years compare against the same month-range of the prior year (YTD-vs-YTD)."
           />
           <div className="overflow-x-auto">
             <table className="ia-table">
@@ -275,7 +280,13 @@ export default function Financials() {
                 {yoy.map((y) => (
                   <tr key={`${y.entity_id}-${y.yr}`}>
                     <td className="font-medium">{y.entity_short_name}</td>
-                    <td>{y.yr}</td>
+                    <td>
+                      {y.is_partial_year
+                        ? <span title={`Through month ${y.last_month_in_year}; YoY % compares to same ${y.last_month_in_year} months of ${y.yr - 1}.`}>
+                            {y.yr} <span className="text-xs text-ia-muted">YTD ({y.last_month_in_year}mo)</span>
+                          </span>
+                        : y.yr}
+                    </td>
                     <td className="text-right">{fmtCurrency(y.revenue, { abbreviate: true })}</td>
                     <td className={cn('text-right font-medium',
                       y.revenue_yoy_pct == null ? 'text-ia-muted'
