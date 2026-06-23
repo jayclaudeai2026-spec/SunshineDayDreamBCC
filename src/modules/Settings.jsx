@@ -64,7 +64,7 @@ function Field({ label, value, mono = false }) {
   return (
     <div>
       <dt className="text-xs font-medium text-ia-muted uppercase tracking-wide">{label}</dt>
-      <dd className={cn('mt-0.5 text-ia-navy', mono && 'font-mono text-sm')}>{value ?? '\u2014'}</dd>
+      <dd className={cn('mt-0.5 text-ia-navy', mono && 'font-mono text-sm')}>{value ?? '—'}</dd>
     </div>
   );
 }
@@ -96,10 +96,10 @@ function ClientContextTab() {
           <Field label="Tier"              value={ctx.tier} />
           <Field label="Variant"           value={ctx.variant} />
           <Field label="Founder client"    value={ctx.founder_client ? 'yes' : 'no'} />
-          <Field label="Setup fee paid"    value={ctx.setup_fee_paid_amount != null ? `$${Number(ctx.setup_fee_paid_amount).toLocaleString()}` : '\u2014'} />
-          <Field label="Install started"   value={ctx.install_started_at ? fmtDate(ctx.install_started_at) : '\u2014'} />
+          <Field label="Setup fee paid"    value={ctx.setup_fee_paid_amount != null ? `$${Number(ctx.setup_fee_paid_amount).toLocaleString()}` : '—'} />
+          <Field label="Install started"   value={ctx.install_started_at ? fmtDate(ctx.install_started_at) : '—'} />
           <Field label="Handoff completed" value={ctx.handoff_completed_at ? fmtDate(ctx.handoff_completed_at) : 'in progress'} />
-          <Field label="Support end date"  value={ctx.support_end_date ? fmtDate(ctx.support_end_date) : '\u2014'} />
+          <Field label="Support end date"  value={ctx.support_end_date ? fmtDate(ctx.support_end_date) : '—'} />
         </dl>
         {ctx.notes && (
           <div className="mt-4 pt-4 border-t border-ia-border">
@@ -125,8 +125,8 @@ function ClientContextTab() {
                   <td className="text-ia-navy">{e.legal_name}</td>
                   <td>{e.entity_type}</td>
                   <td>{e.entity_role}</td>
-                  <td>{e.state ?? '\u2014'}</td>
-                  <td className="text-xs text-ia-muted">{e.fiscal_year_end != null ? `month ${e.fiscal_year_end}` : '\u2014'}</td>
+                  <td>{e.state ?? '—'}</td>
+                  <td className="text-xs text-ia-muted">{e.fiscal_year_end != null ? `month ${e.fiscal_year_end}` : '—'}</td>
                   <td>{e.is_active ? <span className="ia-pill-success">active</span> : <span className="ia-pill-muted">inactive</span>}</td>
                 </tr>
               ))}
@@ -175,7 +175,7 @@ function EmailSendersTab() {
 
   return (
     <div className="ia-card">
-      <SectionHeader title="Sender \u2192 entity routing"
+      <SectionHeader title="Sender → entity routing"
         description="The 4th layer of the 5-layer entity ID. When the email-ingest function can't identify the entity from subject, filename, or CSV content, it looks up the sender here." />
       <table className="ia-table">
         <thead><tr><th>Sender</th><th>Entity</th><th>Primary?</th><th>Notes</th></tr></thead>
@@ -189,14 +189,14 @@ function EmailSendersTab() {
                     <div className="font-mono text-xs">{s.entities.entity_short_name}</div>
                     <div className="text-xs text-ia-muted">{s.entities.legal_name}</div>
                   </div>
-                ) : <span className="text-ia-muted">\u2014 entity missing \u2014</span>}
+                ) : <span className="text-ia-muted">— entity missing —</span>}
               </td>
               <td>
                 {s.is_primary
                   ? <span className="ia-pill-info inline-flex items-center gap-1"><Star size={10} /> primary</span>
-                  : <span className="text-xs text-ia-muted">\u2014</span>}
+                  : <span className="text-xs text-ia-muted">—</span>}
               </td>
-              <td className="text-xs text-ia-muted">{s.notes ?? '\u2014'}</td>
+              <td className="text-xs text-ia-muted">{s.notes ?? '—'}</td>
             </tr>
           ))}
         </tbody>
@@ -242,7 +242,7 @@ function EmailTemplatesTab() {
               <div className="text-xs font-mono text-ia-muted mt-1">{t.template_key}</div>
               <div className="text-xs text-ia-ink mt-1">
                 <span className="text-ia-muted">subject: </span>
-                {truncate(t.subject_template ?? t.subject_line ?? '\u2014', 100)}
+                {truncate(t.subject_template ?? t.subject_line ?? '—', 100)}
               </div>
               {t.description && <div className="text-xs text-ia-muted mt-1">{truncate(t.description, 160)}</div>}
             </div>
@@ -253,13 +253,13 @@ function EmailTemplatesTab() {
               <div>
                 <div className="text-xs font-medium text-ia-muted uppercase mb-1">Subject line</div>
                 <div className="text-sm font-mono bg-ia-cream-dark p-2 rounded">
-                  {t.subject_template ?? t.subject_line ?? '\u2014'}
+                  {t.subject_template ?? t.subject_line ?? '—'}
                 </div>
               </div>
               <div>
                 <div className="text-xs font-medium text-ia-muted uppercase mb-1">HTML body (preview)</div>
                 <pre className="text-xs bg-ia-cream-dark p-3 rounded overflow-auto max-h-72 whitespace-pre-wrap break-words">
-                  {t.html_body_template ?? t.html_body ?? '\u2014'}
+                  {t.html_body_template ?? t.html_body ?? '—'}
                 </pre>
               </div>
               {t.text_body_template && (
@@ -323,7 +323,7 @@ function SocialAccountsTab() {
                     <div className="font-mono">{a.entities.entity_short_name}</div>
                     <div className="text-ia-muted">{a.entities.legal_name}</div>
                   </>
-                ) : '\u2014'}
+                ) : '—'}
               </td>
               <td>
                 <span className={a.posting_method === 'api' ? 'ia-pill-success' : 'ia-pill-warning'}>
@@ -331,7 +331,7 @@ function SocialAccountsTab() {
                 </span>
               </td>
               <td>{a.is_active ? <span className="ia-pill-success">on</span> : <span className="ia-pill-muted">off</span>}</td>
-              <td className="text-xs text-ia-muted">{truncate(a.brand_voice_notes, 100) ?? '\u2014'}</td>
+              <td className="text-xs text-ia-muted">{truncate(a.brand_voice_notes, 100) ?? '—'}</td>
             </tr>
           ))}
         </tbody>
@@ -362,7 +362,7 @@ function IntegrationsTab() {
         <dl className="grid sm:grid-cols-3 gap-x-6 gap-y-3 text-sm">
           <Field label="BCC version"     value={status.bcc_version} mono />
           <Field label="Overall health"  value={status.overall_health} />
-          <Field label="Last check"      value={status.last_health_check_at ? fmtRelative(status.last_health_check_at) : '\u2014'} />
+          <Field label="Last check"      value={status.last_health_check_at ? fmtRelative(status.last_health_check_at) : '—'} />
           <Field label="Active entities" value={status.active_entities_count} />
           <Field label="Last ingest"     value={status.last_email_ingest_at ? fmtRelative(status.last_email_ingest_at) : 'never'} />
           <Field label="Last parser run" value={status.last_parser_run_at ? fmtRelative(status.last_parser_run_at) : 'never'} />
@@ -395,8 +395,8 @@ function IntegrationsTab() {
                       <div className="font-medium text-sm text-ia-navy">{tk}</div>
                       <div className="text-xs text-ia-muted">
                         {h.status ?? (ok ? 'connected' : 'unknown')}
-                        {h.last_checked_at && <> \u00b7 checked {fmtRelative(h.last_checked_at)}</>}
-                        {h.account_id && <> \u00b7 account {h.account_id}</>}
+                        {h.last_checked_at && <> · checked {fmtRelative(h.last_checked_at)}</>}
+                        {h.account_id && <> · account {h.account_id}</>}
                       </div>
                       {h.error && <div className="text-xs text-red-700 mt-0.5">{h.error}</div>}
                     </div>

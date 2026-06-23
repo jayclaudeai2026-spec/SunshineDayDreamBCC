@@ -25,12 +25,15 @@ import { fmtRelative, fmtDate, cn, severityPillClass, truncate } from '../lib/ut
 // ---------------------------------------------------------------------------
 
 export default function TasksGoals() {
-  // 1. Overdue close items
+  // 1. Overdue close items — closes still open more than 30 days AFTER period END.
+  // `period` is the first-of-month date for the period. Period end = period + 1 month - 1 day.
+  // So a close is overdue when (period + 1 month + 30 days) < today, i.e.
+  //   period < today - 1 month - 30 days.
   const { data: overdueCloses, loading: l1, refetch: r1 } = useSupabaseQuery(
     () => {
       const cutoff = new Date();
+      cutoff.setUTCMonth(cutoff.getUTCMonth() - 1);
       cutoff.setUTCDate(cutoff.getUTCDate() - 30);
-      // We want close cycles whose period is older than 30 days but still not complete.
       // Status enum: open | in_progress | blocked | complete
       return supabase
         .from('monthly_close_progress_view')
@@ -170,12 +173,12 @@ export default function TasksGoals() {
                   <li key={c.id} className="py-2 flex items-center justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="font-medium text-sm text-ia-navy">
-                        {c.entity_short_name} \u00b7 {fmtDate(c.period, 'MMM yyyy')}
+                        {c.entity_short_name} · {fmtDate(c.period, 'MMM yyyy')}
                       </div>
                       <div className="text-xs text-ia-muted">
                         opened {fmtRelative(c.opened_at)}
-                        \u00b7 {c.items_completed}/{c.items_total} items
-                        \u00b7 status {c.status}
+                        · {c.items_completed}/{c.items_total} items
+                        · status {c.status}
                       </div>
                     </div>
                     <div className="flex items-center gap-2 min-w-[6rem]">
@@ -212,10 +215,10 @@ export default function TasksGoals() {
                   <li key={t.calendar_id} className="py-2 flex items-center justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="font-medium text-sm text-ia-navy">
-                        {t.entity_short_name} \u00b7 {t.filing_type}
+                        {t.entity_short_name} · {t.filing_type}
                       </div>
                       <div className="text-xs text-ia-muted">
-                        {t.jurisdiction} \u00b7 {t.period_covered} \u00b7 due {fmtDate(t.due_date)}
+                        {t.jurisdiction} · {t.period_covered} · due {fmtDate(t.due_date)}
                       </div>
                     </div>
                     <div className="text-right">
@@ -261,7 +264,7 @@ export default function TasksGoals() {
                       <div className="flex-1 min-w-0">
                         <div className="text-sm text-ia-navy">{truncate(a.message, 160)}</div>
                         <div className="text-xs text-ia-muted mt-0.5">
-                          {a.category} \u00b7 raised {fmtRelative(a.raised_at)}
+                          {a.category} · raised {fmtRelative(a.raised_at)}
                         </div>
                       </div>
                     </div>
@@ -297,12 +300,12 @@ export default function TasksGoals() {
                         <div className="flex-1 min-w-0">
                           {(entity || period) && (
                             <div className="text-xs font-medium text-ia-navy mb-0.5">
-                              {entity}{entity && period ? ' \u00b7 ' : ''}{period}
+                              {entity}{entity && period ? ' · ' : ''}{period}
                             </div>
                           )}
                           <div className="text-sm text-ia-navy">{truncate(a.message, 280)}</div>
                           <div className="text-xs text-ia-muted mt-0.5">
-                            #{a.id} \u00b7 raised {fmtRelative(a.raised_at)}
+                            #{a.id} · raised {fmtRelative(a.raised_at)}
                           </div>
                         </div>
                       </div>
@@ -339,9 +342,9 @@ export default function TasksGoals() {
                         )}
                       </div>
                       <div className="text-right text-xs whitespace-nowrap">
-                        <span className="text-emerald-700">{r.success_count} \u2713</span>
+                        <span className="text-emerald-700">{r.success_count} ✓</span>
                         <span className="text-ia-muted"> / </span>
-                        <span className="text-red-700">{r.failure_count} \u2717</span>
+                        <span className="text-red-700">{r.failure_count} ✗</span>
                         {r.last_run_at && (
                           <div className="text-ia-muted mt-0.5">last {fmtRelative(r.last_run_at)}</div>
                         )}

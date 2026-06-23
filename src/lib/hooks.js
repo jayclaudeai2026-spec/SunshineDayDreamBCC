@@ -127,6 +127,24 @@ export function useUnresolvedAlerts({ limit = 20 } = {}) {
 }
 
 /**
+ * useUnresolvedAlertCount — returns just the count of unresolved alerts.
+ * Use this for the header badge instead of useUnresolvedAlerts({limit:N}).length,
+ * which silently caps at N.
+ */
+export function useUnresolvedAlertCount() {
+  return useSupabaseQuery(
+    async () => {
+      const { count, error } = await supabase
+        .from('system_alerts')
+        .select('id', { count: 'exact', head: true })
+        .is('resolved_at', null);
+      return { data: count ?? 0, error };
+    },
+    [],
+  );
+}
+
+/**
  * useAuthUser — returns the currently signed-in user (or null).
  * Subscribes to auth state changes so the UI re-renders on sign-in/out.
  */

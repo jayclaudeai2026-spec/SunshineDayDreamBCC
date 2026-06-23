@@ -20,7 +20,7 @@ import DemoBanner from './components/DemoBanner.jsx';
 import LoadingState from './components/LoadingState.jsx';
 import EmptyState from './components/EmptyState.jsx';
 import {
-  useAuthUser, useClientContext, useUnresolvedAlerts, useMyModuleAccess,
+  useAuthUser, useClientContext, useUnresolvedAlertCount, useMyModuleAccess,
 } from './lib/hooks.js';
 import { DEMO_MODE, supabase } from './lib/supabase.js';
 import { cn } from './lib/utils.js';
@@ -60,7 +60,7 @@ const NAV = [
 export default function BCCApp() {
   const { user, loading: authLoading } = useAuthUser();
   const { data: ctx } = useClientContext();
-  const { data: alerts } = useUnresolvedAlerts({ limit: 5 });
+  const { data: alertCount } = useUnresolvedAlertCount();
   const { data: access, loading: accessLoading } = useMyModuleAccess();
 
   // IMPORTANT: derived hook values must be declared BEFORE any conditional
@@ -94,7 +94,6 @@ export default function BCCApp() {
   });
 
   const clientName = ctx?.display_name ?? 'Sunshine Daydream BCC';
-  const alertCount = alerts?.length ?? 0;
 
   return (
     <div className="min-h-screen flex flex-col">
