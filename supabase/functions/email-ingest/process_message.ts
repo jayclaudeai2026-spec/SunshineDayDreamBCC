@@ -1,8 +1,9 @@
-// process_message v10 (2026-06-18):
+// process_message v11 (2026-06-23):
 //   - v7: receipt sending gated by sendReceipts flag (default false).
 //   - v8: only pass ingestable (CSV/XLSX/XLS) attachments to identifyEntity. No fallback to allAttachments — prevents inline signature images from triggering false-positive filename_pattern matches.
 //   - v9: no changes to this file; period parsing now handles MM/DD/YYYY (see _shared/template.ts).
-//   - v10 (this rev): unwrap() now handles both "data" and "response_data" Composio v3 envelopes. The previous version only peeled "data", which composio.ts already strips at the execute() layer; the v3 inner envelope is "response_data", which leaked through and caused GMAIL_CREATE_EMAIL_DRAFT responses to look like { response_data: { id, message: {...} } } at the call site — draftR.id was undefined and the code threw "no draft id" despite drafts being created successfully in Gmail. Symptom on 2026-06-18 Gate 1 poll: 8 orphan drafts in Drafts folder, 8 failed email_send_log rows, no actual receipts delivered. Manual GMAIL_SEND_DRAFT calls recovered them. This patch makes the same unwrap-tolerant for the draftResp / verifyResp / sentResp shapes so future polls work end-to-end.
+//   - v10: unwrap() now handles both "data" and "response_data" Composio v3 envelopes. The previous version only peeled "data", which composio.ts already strips at the execute() layer; the v3 inner envelope is "response_data", which leaked through and caused GMAIL_CREATE_EMAIL_DRAFT responses to look like { response_data: { id, message: {...} } } at the call site — draftR.id was undefined and the code threw "no draft id" despite drafts being created successfully in Gmail. Symptom on 2026-06-18 Gate 1 poll: 8 orphan drafts in Drafts folder, 8 failed email_send_log rows, no actual receipts delivered. Manual GMAIL_SEND_DRAFT calls recovered them. This patch makes the same unwrap-tolerant for the draftResp / verifyResp / sentResp shapes so future polls work end-to-end.
+//   - v11 (this rev): mirror Drive-archived files into public.documents so the Documents page stays in sync with Drive. Each archived XLSX/CSV gets a documents row with category=financial, tags derived from filename (P&L / Balance Sheet / GL), reporting_period from filename qtr or 'through MM-DD-YYYY' pattern, and source_ingest_id linking back to ingest_log. Non-fatal on failure (ingest_log + Drive archive already succeeded). One-time SQL backfill on 2026-06-23 populated 132 historical rows; v11 keeps it current going forward.
 
 import type { SupabaseClient } from "./_shared/supabase.ts";
 import { ComposioClient, ComposioError } from "./_shared/composio.ts";
@@ -184,6 +185,33 @@ export async function processMessage(args: {
   }
 
   const ingestId = inserted.id as number;
+
+  // v11: mirror Drive-archived files to public.documents (non-fatal on failure)
+  if (driveFileIds.length > 0) {
+    try {
+      let entityShortForDocs: string | null = null;
+      if (ident.entity_id) {
+        const { data: e2 } = await sb
+          .from("entities")
+          .select("entity_short_name")
+          .eq("id", ident.entity_id)
+          .maybeSingle();
+        entityShortForDocs = (e2?.entity_short_name as string | null) ?? null;
+      }
+      await writeDocumentRows({
+        sb,
+        ingestId,
+        entity_id: ident.entity_id,
+        entity_short_name: entityShortForDocs,
+        csvs,
+        driveFileIds,
+        reportingPeriod,
+      });
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      console.error(`documents mirror failed for ingest_id=${ingestId}: ${m}`);
+    }
+  }
 
   if (sendReceipts) {
     try {
@@ -424,3 +452,105 @@ function unwrap(resp: unknown): unknown {
   }
   return resp;
 }
+
+// v11: write one documents row per Drive-archived file so the Documents page mirrors Drive.
+// Parses report type / fiscal year / quarter from the filename. Idempotent via ON CONFLICT.
+async function writeDocumentRows(args: {
+  sb: SupabaseClient;
+  ingestId: number;
+  entity_id: number | null;
+  entity_short_name: string | null;
+  csvs: Array<{ filename: string; mime_type?: string }>;
+  driveFileIds: string[];
+  reportingPeriod: string | null;
+}): Promise<void> {
+  const { sb, ingestId, entity_id, entity_short_name, csvs, driveFileIds, reportingPeriod } = args;
+  if (driveFileIds.length === 0) return;
+
+  const rows: Record<string, unknown>[] = [];
+  for (let i = 0; i < driveFileIds.length; i++) {
+    const fid = driveFileIds[i];
+    if (!fid) continue;
+    const fname = csvs[i]?.filename ?? `unknown_${i}.xlsx`;
+    const upper = fname.toUpperCase();
+
+    let report_type = "other";
+    if (/BAL\s*SHEET|BALANCE\s*SHEET/.test(upper)) report_type = "balance-sheet";
+    else if (/P&L|\bPL\b/.test(upper)) report_type = "pnl";
+    else if (/\bGL\b|GENERAL\s*LEDGER/.test(upper)) report_type = "gl";
+
+    const yrMatch = fname.match(/\b(20\d\d)\b/);
+    const year = yrMatch ? parseInt(yrMatch[1], 10) : null;
+
+    const qMatch = /(1st|2nd|3rd|4th)\s*QTR|Q([1-4])\b/i.exec(fname);
+    const throughMatch = fname.match(/through\s+(\d{2})-(\d{2})-(20\d\d)/i);
+
+    let period_date: string | null = null;
+    if (year && qMatch) {
+      const qNum = qMatch[1]
+        ? ["1st", "2nd", "3rd", "4th"].indexOf(qMatch[1].toLowerCase()) + 1
+        : parseInt(qMatch[2], 10);
+      const m = String((qNum - 1) * 3 + 1).padStart(2, "0");
+      period_date = `${year}-${m}-01`;
+    } else if (throughMatch) {
+      period_date = `${throughMatch[3]}-${throughMatch[1]}-01`;
+    } else if (year) {
+      period_date = `${year}-01-01`;
+    } else if (reportingPeriod) {
+      period_date = reportingPeriod;
+    }
+
+    const reportLabel =
+      report_type === "pnl" ? "P&L" :
+      report_type === "balance-sheet" ? "Balance Sheet" :
+      report_type === "gl" ? "General Ledger" : "financial report";
+
+    let qualifier = "";
+    if (qMatch && qMatch[1]) qualifier = ` ${qMatch[1]} QTR`;
+    else if (qMatch && qMatch[2]) qualifier = ` Q${qMatch[2]}`;
+    else if (throughMatch) qualifier = ` through ${throughMatch[3]}-${throughMatch[1]}`;
+
+    const ext = fname.toLowerCase().split(".").pop() ?? "xlsx";
+    const mime = csvs[i]?.mime_type
+      ?? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+    const folderPath = entity_short_name && year
+      ? `${entity_short_name}/${year}`
+      : null;
+
+    const tags = ["source-financial", "rebecca-monthly", report_type];
+    if (year) tags.push(`fy${year}`);
+
+    rows.push({
+      entity_id,
+      drive_file_id: fid,
+      drive_url: `https://drive.google.com/file/d/${fid}/view`,
+      file_name: fname,
+      file_extension: ext,
+      mime_type: mime,
+      folder_path: folderPath,
+      category: "financial",
+      tags,
+      description: `Source ${reportLabel} for ${entity_short_name ?? "unidentified entity"} (${year ?? "?"}${qualifier}) — archived from email-ingest pipeline.`,
+      reporting_period: period_date,
+      tax_year: year,
+      source: "email_ingest",
+      source_ingest_id: ingestId,
+      uploaded_by_email: "accounting@sunshinedaydream.com",
+      is_archived: false,
+    });
+  }
+
+  if (rows.length === 0) return;
+
+  const { error } = await sb
+    .from("documents")
+    .upsert(rows, { onConflict: "drive_file_id", ignoreDuplicates: true });
+
+  if (error) {
+    console.error(
+      `documents upsert failed for ingest_id=${ingestId}: ${error.message}`,
+    );
+  }
+}
+
