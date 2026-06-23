@@ -68,7 +68,15 @@ export default function Financials() {
   const monthsData = useMemo(() => {
     if (!pl) return [];
     if (entityFilter) {
-      return [...pl].sort((a, b) => a.period.localeCompare(b.period)).slice(-MONTHS_TO_SHOW);
+      // Defensive filter — even if `pl` is briefly stale (group data left over
+      // from a previous fetch), the table must never show rows from other
+      // entities while the dropdown reads a specific entity. The .eq() in the
+      // query usually handles this, but a render between dropdown change and
+      // refetch completion can transiently have stale rows.
+      return [...pl]
+        .filter((row) => row.entity_id === entityFilter)
+        .sort((a, b) => a.period.localeCompare(b.period))
+        .slice(-MONTHS_TO_SHOW);
     }
     // Group: aggregate across entities by period
     const byPeriod = new Map();
