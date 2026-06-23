@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  ListChecks, AlertCircle, Receipt, Workflow, FileText,
+  ListChecks, AlertCircle, Receipt, Workflow, FileText, Search,
   ArrowRight, CheckCircle2, RefreshCw, Calendar,
 } from 'lucide-react';
 
@@ -14,12 +14,14 @@ import { fmtRelative, fmtDate, cn, severityPillClass, truncate } from '../lib/ut
 
 // ---------------------------------------------------------------------------
 // Top of the funnel — what should I look at right now?
-// Aggregates from five sources and ranks them in operator-priority order:
+// Aggregates from six sources and ranks them in operator-priority order:
 //   1. Overdue close items (close cycles still open after period+30d)
 //   2. Tax obligations due in next 14 days
 //   3. Unresolved error/critical alerts
-//   4. Recipes that are failing more than succeeding
-//   5. Documents stuck in 'other' category (categorizer never caught up)
+//   4. Financial review queue (warning-level data_quality alerts) — items
+//      Jay needs to walk through and explain during the financials review
+//   5. Recipes that are failing more than succeeding
+//   6. Documents stuck in 'other' category (categorizer never caught up)
 // ---------------------------------------------------------------------------
 
 export default function TasksGoals() {
@@ -64,8 +66,23 @@ export default function TasksGoals() {
     [],
   );
 
-  // 4. Recipes with high failure rates
-  const { data: unstableRecipes, loading: l4, refetch: r4 } = useSupabaseQuery(
+  // 4. Financial review queue — warning-level data_quality alerts awaiting
+  //    owner walkthrough. These are items Claude flagged during the financials
+  //    audit that Jay needs to explain (not bookkeeper-facing).
+  const { data: reviewQueue, loading: l4, refetch: r4 } = useSupabaseQuery(
+    () => supabase
+      .from('system_alerts')
+      .select('id, severity, category, message, raised_at, entity_id, context')
+      .is('resolved_at', null)
+      .eq('severity', 'warning')
+      .eq('category', 'data_quality')
+      .order('raised_at', { ascending: false })
+      .limit(50),
+    [],
+  );
+
+  // 5. Recipes with high failure rates
+  const { data: unstableRecipes, loading: l5, refetch: r5 } = useSupabaseQuery(
     () => supabase
       .from('automation_recipes')
       .select('id, recipe_key, name, success_count, failure_count, last_run_at, last_error, category')
@@ -75,8 +92,8 @@ export default function TasksGoals() {
     [],
   );
 
-  // 5. Documents pending categorization (category='other')
-  const { data: uncategorizedDocs, loading: l5, refetch: r5 } = useSupabaseQuery(
+  // 6. Documents pending categorization (category='other')
+  const { data: uncategorizedDocs, loading: l6, refetch: r6 } = useSupabaseQuery(
     () => supabase
       .from('documents')
       .select('id, file_name, drive_url, created_at, entity_id')
@@ -92,17 +109,18 @@ export default function TasksGoals() {
     return (unstableRecipes ?? []).filter((r) => r.failure_count > r.success_count && r.failure_count > 0);
   }, [unstableRecipes]);
 
-  const totalLoading = l1 || l2 || l3 || l4 || l5;
-  const refetchAll = () => { r1(); r2(); r3(); r4(); r5(); };
+  const totalLoading = l1 || l2 || l3 || l4 || l5 || l6;
+  const refetchAll = () => { r1(); r2(); r3(); r4(); r5(); r6(); };
 
   const totals = {
-    closes: overdueCloses?.length ?? 0,
-    tax:    dueTax?.length ?? 0,
-    alerts: criticalAlerts?.length ?? 0,
+    closes:  overdueCloses?.length ?? 0,
+    tax:     dueTax?.length ?? 0,
+    alerts:  criticalAlerts?.length ?? 0,
+    review:  reviewQueue?.length ?? 0,
     recipes: trulyUnstable.length,
-    docs:   uncategorizedDocs?.length ?? 0,
+    docs:    uncategorizedDocs?.length ?? 0,
   };
-  const grandTotal = totals.closes + totals.tax + totals.alerts + totals.recipes + totals.docs;
+  const grandTotal = totals.closes + totals.tax + totals.alerts + totals.review + totals.recipes + totals.docs;
 
   return (
     <section className="space-y-6">
@@ -127,8 +145,8 @@ export default function TasksGoals() {
           <h2 className="text-ia-navy">Nothing pressing. Take a breath.</h2>
           <p className="mt-2 max-w-md text-sm text-ia-muted">
             No overdue closes, no upcoming tax deadlines in the next 14 days, no unresolved
-            critical alerts, no failing recipes, and no documents stuck in categorization.
-            Use the quiet to do something deliberate.
+            critical alerts, no financial review items, no failing recipes, and no documents
+            stuck in categorization. Use the quiet to do something deliberate.
           </p>
         </div>
       ) : (
@@ -253,9 +271,51 @@ export default function TasksGoals() {
             )}
           </PrioritySection>
 
-          {/* SECTION 4: Unstable recipes */}
+          {/* SECTION 4: Financial review queue (data_quality warnings) */}
           <PrioritySection
             number={4}
+            title="Financial review queue"
+            icon={Search}
+            tone="warning"
+            count={totals.review}
+            description="Data anomalies flagged during the financials audit. Walk through each with Claude during the next financials review and resolve with a note in Alerts."
+            viewAllLink={{ to: '/alerts', label: 'Open Alerts' }}
+          >
+            {!reviewQueue ? <LoadingState /> :
+             reviewQueue.length === 0 ? (
+              <ClearedNote message="No open financial review items." />
+            ) : (
+              <ul className="divide-y divide-ia-border">
+                {reviewQueue.map((a) => {
+                  const ctx = a.context ?? {};
+                  const entity = ctx.entity_short_name ?? null;
+                  const period = ctx.period ?? ctx.period_window ?? null;
+                  return (
+                    <li key={a.id} className="py-2">
+                      <div className="flex items-start gap-2">
+                        <span className={severityPillClass(a.severity)}>review</span>
+                        <div className="flex-1 min-w-0">
+                          {(entity || period) && (
+                            <div className="text-xs font-medium text-ia-navy mb-0.5">
+                              {entity}{entity && period ? ' \u00b7 ' : ''}{period}
+                            </div>
+                          )}
+                          <div className="text-sm text-ia-navy">{truncate(a.message, 280)}</div>
+                          <div className="text-xs text-ia-muted mt-0.5">
+                            #{a.id} \u00b7 raised {fmtRelative(a.raised_at)}
+                          </div>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </PrioritySection>
+
+          {/* SECTION 5: Unstable recipes */}
+          <PrioritySection
+            number={5}
             title="Recipes with high failure rates"
             icon={Workflow}
             tone="warning"
@@ -293,9 +353,9 @@ export default function TasksGoals() {
             )}
           </PrioritySection>
 
-          {/* SECTION 5: Uncategorized docs */}
+          {/* SECTION 6: Uncategorized docs */}
           <PrioritySection
-            number={5}
+            number={6}
             title="Documents pending categorization"
             icon={FileText}
             tone="info"
