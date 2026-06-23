@@ -1,9 +1,10 @@
-// process_message v11 (2026-06-23):
+// process_message v12 (2026-06-23):
 //   - v7: receipt sending gated by sendReceipts flag (default false).
 //   - v8: only pass ingestable (CSV/XLSX/XLS) attachments to identifyEntity. No fallback to allAttachments — prevents inline signature images from triggering false-positive filename_pattern matches.
 //   - v9: no changes to this file; period parsing now handles MM/DD/YYYY (see _shared/template.ts).
 //   - v10: unwrap() now handles both "data" and "response_data" Composio v3 envelopes. The previous version only peeled "data", which composio.ts already strips at the execute() layer; the v3 inner envelope is "response_data", which leaked through and caused GMAIL_CREATE_EMAIL_DRAFT responses to look like { response_data: { id, message: {...} } } at the call site — draftR.id was undefined and the code threw "no draft id" despite drafts being created successfully in Gmail. Symptom on 2026-06-18 Gate 1 poll: 8 orphan drafts in Drafts folder, 8 failed email_send_log rows, no actual receipts delivered. Manual GMAIL_SEND_DRAFT calls recovered them. This patch makes the same unwrap-tolerant for the draftResp / verifyResp / sentResp shapes so future polls work end-to-end.
-//   - v11 (this rev): mirror Drive-archived files into public.documents so the Documents page stays in sync with Drive. Each archived XLSX/CSV gets a documents row with category=financial, tags derived from filename (P&L / Balance Sheet / GL), reporting_period from filename qtr or 'through MM-DD-YYYY' pattern, and source_ingest_id linking back to ingest_log. Non-fatal on failure (ingest_log + Drive archive already succeeded). One-time SQL backfill on 2026-06-23 populated 132 historical rows; v11 keeps it current going forward.
+//   - v11: mirror Drive-archived files into public.documents so the Documents page stays in sync with Drive. Each archived XLSX/CSV gets a documents row with category=financial, tags derived from filename (P&L / Balance Sheet / GL), reporting_period from filename qtr or 'through MM-DD-YYYY' pattern, and source_ingest_id linking back to ingest_log. Non-fatal on failure (ingest_log + Drive archive already succeeded). One-time SQL backfill on 2026-06-23 populated 132 historical rows; v11 keeps it current going forward.
+//   - v12 (this rev): Drive archive path now mirrors the Documents page category-first layout. New structure is bcc_root/<category>/<entity_short_name>/<YYYY>/<MM>/, where category is hard-coded to 'financial' since this pipeline only handles Rebecca's monthly financial packages. On 2026-06-23 the 11 existing entity folders were moved from bcc_root/<entity> into bcc_root/financial/<entity> (drive_folder_mappings.folder_index was also cleared since the cached paths no longer match). documents.folder_path on the 132 backfilled rows was updated to prepend 'financial/'.
 
 import type { SupabaseClient } from "./_shared/supabase.ts";
 import { ComposioClient, ComposioError } from "./_shared/composio.ts";
@@ -116,7 +117,7 @@ export async function processMessage(args: {
           composio,
           sb,
           bccRoot,
-          [entityShort, yyyy, mm],
+          ["financial", entityShort, yyyy, mm],
         );
 
         for (const csv of csvs) {
@@ -515,7 +516,7 @@ async function writeDocumentRows(args: {
       ?? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
     const folderPath = entity_short_name && year
-      ? `${entity_short_name}/${year}`
+      ? `financial/${entity_short_name}/${year}`
       : null;
 
     const tags = ["source-financial", "rebecca-monthly", report_type];
