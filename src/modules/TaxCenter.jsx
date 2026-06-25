@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   Calendar, AlertTriangle, AlertCircle, CheckCircle2, Clock,
   ChevronDown, ChevronRight, RefreshCw, FileText, MapPin, User, Building2, ExternalLink,
+  TrendingUp, TrendingDown, Minus, Target,
 } from 'lucide-react';
 
 import SectionHeader from '../components/SectionHeader.jsx';
@@ -16,6 +17,7 @@ const TABS = [
   { key: 'upcoming', label: 'Upcoming' },
   { key: 'pastdue',  label: 'Past due' },
   { key: 'history',  label: 'Filed & paid' },
+  { key: 'position', label: 'Position' },
   { key: 'profiles', label: 'Profiles' },
 ];
 
@@ -37,6 +39,15 @@ const STATUS_PILL = {
   extension_filed: 'ia-pill-warning',
   amended:         'ia-pill-warning',
   n_a:             'ia-pill-muted',
+};
+
+const TAX_HEALTH_LABEL = {
+  on_track:         { pill: 'ia-pill-success', label: 'On track' },
+  under_paying:     { pill: 'ia-pill-warning', label: 'Under paying' },
+  no_payments_made: { pill: 'ia-pill-warning', label: 'No payments made' },
+  loss_year:        { pill: 'ia-pill-muted',   label: 'Loss year' },
+  no_data:          { pill: 'ia-pill-muted',   label: 'No data' },
+  closed:           { pill: 'ia-pill-muted',   label: 'Closed' },
 };
 
 const PAYMENT_TYPE_LABEL = {
@@ -70,6 +81,23 @@ function urgencyClass(days) {
   if (days <= 7) return 'text-red-700 font-medium';
   if (days <= 14) return 'text-amber-700 font-medium';
   if (days <= 30) return 'text-ia-navy';
+  return 'text-ia-muted';
+}
+
+function fmtPct(p) {
+  if (p == null) return '—';
+  const v = Number(p);
+  if (Number.isNaN(v)) return '—';
+  const sign = v > 0 ? '+' : '';
+  return `${sign}${v.toFixed(1)}%`;
+}
+
+function yoyColor(p) {
+  if (p == null) return 'text-ia-muted';
+  const v = Number(p);
+  if (Number.isNaN(v)) return 'text-ia-muted';
+  if (v > 5) return 'text-emerald-700';
+  if (v < -5) return 'text-red-700';
   return 'text-ia-muted';
 }
 
@@ -115,18 +143,43 @@ export default function TaxCenter() {
     [],
   );
 
+  // Position tab: per-entity per-year forecast
+  const forecastQ = useSupabaseQuery(
+    () => supabase
+      .from('tax_position_forecast_view')
+      .select('*')
+      .order('entity_short_name', { ascending: true })
+      .order('tax_year', { ascending: false }),
+    [],
+  );
+
+  // Filed Returns sub-panel: tax_documents joined with entities
+  const taxDocsQ = useSupabaseQuery(
+    () => supabase
+      .from('tax_documents')
+      .select('*, entities(entity_short_name, legal_name)')
+      .order('tax_year', { ascending: false })
+      .order('entity_id', { ascending: true })
+      .limit(100),
+    [],
+  );
+
   const upcoming = upcomingQ.data ?? [];
   const filed = calendarQ.data ?? [];
   const payments = paymentsQ.data ?? [];
   const profiles = profilesQ.data ?? [];
+  const forecast = forecastQ.data ?? [];
+  const taxDocs = taxDocsQ.data ?? [];
 
-  const loading = upcomingQ.loading || calendarQ.loading || profilesQ.loading;
+  const loading = upcomingQ.loading || calendarQ.loading || profilesQ.loading || forecastQ.loading;
 
   const refetchAll = () => {
     upcomingQ.refetch();
     calendarQ.refetch();
     paymentsQ.refetch();
     profilesQ.refetch();
+    forecastQ.refetch();
+    taxDocsQ.refetch();
   };
 
   // Split upcoming into not-yet-due and past-due based on days_until_due
@@ -164,6 +217,62 @@ export default function TaxCenter() {
     return m;
   }, [payments]);
 
+  // Map tax_documents by entity_id for History tab cross-reference
+  const docsByEntityYear = useMemo(() => {
+    const m = new Map();
+    for (const d of taxDocs) {
+      const key = `${d.entity_id}-${d.tax_year}`;
+      if (!m.has(key)) m.set(key, []);
+      m.get(key).push(d);
+    }
+    return m;
+  }, [taxDocs]);
+
+  // Forecast: group by entity for the Position tab. Each entity has up to 3 year-rows.
+  const forecastByEntity = useMemo(() => {
+    const m = new Map();
+    for (const f of forecast) {
+      if (!m.has(f.entity_id)) m.set(f.entity_id, []);
+      m.get(f.entity_id).push(f);
+    }
+    return m;
+  }, [forecast]);
+
+  // Pull current-year rows for the aggregate summary
+  const currentYearRows = useMemo(() => forecast.filter((f) => f.is_current_year), [forecast]);
+
+  const aggregatePosition = useMemo(() => {
+    const rev = currentYearRows.reduce((s, r) => s + Number(r.ytd_revenue ?? 0), 0);
+    const ni = currentYearRows.reduce((s, r) => s + Number(r.ytd_net_income ?? 0), 0);
+    const projNi = currentYearRows.reduce((s, r) => s + Number(r.projected_annual_net_income ?? 0), 0);
+    const projRev = currentYearRows.reduce((s, r) => s + Number(r.projected_annual_revenue ?? 0), 0);
+    const projLiab = currentYearRows.reduce((s, r) => s + Number(r.est_federal_tax_liability_projected ?? 0), 0);
+    const payments = currentYearRows.reduce((s, r) => s + Number(r.payments_made ?? 0), 0);
+    const pySamePeriodNi = currentYearRows.reduce((s, r) => s + Number(r.py_same_period_net_income ?? 0), 0);
+    const months = currentYearRows.length > 0
+      ? Math.max(...currentYearRows.map((r) => Number(r.months_recorded ?? 0)))
+      : 0;
+    const onTrackCount = currentYearRows.filter((r) => r.tax_health === 'on_track').length;
+    const lossYearCount = currentYearRows.filter((r) => r.tax_health === 'loss_year').length;
+    const yoy = pySamePeriodNi !== 0 ? ((ni - pySamePeriodNi) / Math.abs(pySamePeriodNi)) * 100 : null;
+    return {
+      ytd_revenue: rev,
+      ytd_net_income: ni,
+      projected_annual_net_income: projNi,
+      projected_annual_revenue: projRev,
+      est_federal_tax_liability_projected: projLiab,
+      payments_made: payments,
+      gap: Math.max(0, projLiab - payments),
+      py_same_period_net_income: pySamePeriodNi,
+      yoy_net_income_pct: yoy,
+      months_recorded: months,
+      entity_count: currentYearRows.length,
+      on_track_count: onTrackCount,
+      loss_year_count: lossYearCount,
+      as_of_date: currentYearRows[0]?.as_of_date,
+    };
+  }, [currentYearRows]);
+
   function applyJurisdictionFilter(items) {
     if (!activeJurisdiction) return items;
     return items.filter((o) => o.jurisdiction === activeJurisdiction);
@@ -181,6 +290,7 @@ export default function TaxCenter() {
     upcoming: futureObligations.length,
     pastdue:  pastDue.length,
     history:  filed.length,
+    position: currentYearRows.length,
     profiles: profiles.length,
   };
 
@@ -190,8 +300,8 @@ export default function TaxCenter() {
         <div>
           <h1>Tax center</h1>
           <p className="text-sm text-ia-muted mt-1">
-            Tracker — not a filer. Upcoming obligations, what's past due, what's been filed
-            and paid, and per-entity profiles. Filings happen with your CPA or portal.
+            Tracker, not a filer. Upcoming obligations, past-due, filed-and-paid, per-entity
+            forecast position, and entity tax profiles. Filings happen with your CPA or portal.
           </p>
         </div>
         <button className="ia-button-ghost" onClick={refetchAll} aria-label="Refresh">
@@ -235,8 +345,8 @@ export default function TaxCenter() {
 
       {loading && <LoadingState label="Loading tax data..." />}
 
-      {/* Jurisdiction filter (not on Profiles tab) */}
-      {activeTab !== 'profiles' && jurisdictions.length > 1 && (
+      {/* Jurisdiction filter (not on Position or Profiles tabs) */}
+      {activeTab !== 'profiles' && activeTab !== 'position' && jurisdictions.length > 1 && (
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-medium text-ia-muted uppercase mr-1">Jurisdiction</span>
           <FilterPill label="All" active={!activeJurisdiction} onClick={() => setActiveJurisdiction(null)} count={jurisdictionCounts && Object.values(jurisdictionCounts).reduce((s, n) => s + n, 0)} />
@@ -325,43 +435,303 @@ export default function TaxCenter() {
 
       {/* HISTORY TAB */}
       {activeTab === 'history' && !loading && (
-        applyJurisdictionFilter(filed).length === 0 ? (
+        <div className="space-y-6">
+          {applyJurisdictionFilter(filed).length === 0 ? (
+            <EmptyState
+              title="No filed records yet"
+              description="Once a tax_calendar entry hits status filed/paid/amended, it shows up here with linked payments."
+            />
+          ) : (
+            <div className="ia-card overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-xs uppercase text-ia-muted border-b border-ia-border">
+                  <tr>
+                    <th className="pb-2 pr-3 font-medium">Filed</th>
+                    <th className="pb-2 pr-3 font-medium">Entity</th>
+                    <th className="pb-2 pr-3 font-medium">Jurisdiction</th>
+                    <th className="pb-2 pr-3 font-medium">Type</th>
+                    <th className="pb-2 pr-3 font-medium">Period</th>
+                    <th className="pb-2 pr-3 font-medium text-right">Paid</th>
+                    <th className="pb-2 pr-3 font-medium">Status</th>
+                    <th className="pb-2 font-medium">Doc</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {applyJurisdictionFilter(filed).map((c) => {
+                    const ty = c.period_covered?.startsWith('TY ') ? Number(c.period_covered.slice(3)) : null;
+                    const docs = ty ? (docsByEntityYear.get(`${c.entity_id}-${ty}`) ?? []) : [];
+                    return (
+                      <tr key={c.id} className="border-b border-ia-border last:border-0">
+                        <td className="py-2 pr-3 whitespace-nowrap">{c.filed_date ? fmtDate(c.filed_date) : '—'}</td>
+                        <td className="py-2 pr-3 text-xs">{c.entities?.entity_short_name ?? `#${c.entity_id}`}</td>
+                        <td className="py-2 pr-3 text-xs">{c.jurisdiction}</td>
+                        <td className="py-2 pr-3 text-xs">{c.filing_type}</td>
+                        <td className="py-2 pr-3 text-xs text-ia-muted">{c.period_covered}</td>
+                        <td className="py-2 pr-3 text-right">{fmtCurrency(c.amount_paid)}</td>
+                        <td className="py-2 pr-3">
+                          <span className={cn(STATUS_PILL[c.status] ?? 'ia-pill-muted', 'text-[10px]')}>
+                            {c.status}
+                          </span>
+                        </td>
+                        <td className="py-2">
+                          {docs.length > 0 && docs[0].drive_url ? (
+                            <a
+                              href={docs[0].drive_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-ia-teal hover:underline"
+                            >
+                              <ExternalLink size={10} /> PDF
+                            </a>
+                          ) : (
+                            <span className="text-xs text-ia-muted">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Filed Returns archive - separate from tax_calendar, sourced from tax_documents */}
+          {taxDocs.length > 0 && (
+            <div>
+              <SectionHeader title="Tax document archive" subtitle={`${taxDocs.length} filed return${taxDocs.length === 1 ? '' : 's'} archived to Drive`} />
+              <div className="ia-card overflow-x-auto mt-3">
+                <table className="w-full text-sm">
+                  <thead className="text-left text-xs uppercase text-ia-muted border-b border-ia-border">
+                    <tr>
+                      <th className="pb-2 pr-3 font-medium">Tax year</th>
+                      <th className="pb-2 pr-3 font-medium">Entity</th>
+                      <th className="pb-2 pr-3 font-medium">Type</th>
+                      <th className="pb-2 pr-3 font-medium">Jurisdiction</th>
+                      <th className="pb-2 pr-3 font-medium">Status</th>
+                      <th className="pb-2 pr-3 font-medium">Preparer</th>
+                      <th className="pb-2 font-medium">PDF</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {taxDocs.map((d) => (
+                      <tr key={d.id} className="border-b border-ia-border last:border-0">
+                        <td className="py-2 pr-3 font-medium">{d.tax_year}</td>
+                        <td className="py-2 pr-3 text-xs">{d.entities?.entity_short_name ?? `#${d.entity_id}`}</td>
+                        <td className="py-2 pr-3 text-xs">{d.document_type}</td>
+                        <td className="py-2 pr-3 text-xs">{d.jurisdiction}</td>
+                        <td className="py-2 pr-3">
+                          <span className="ia-pill-success text-[10px]">{d.document_status}</span>
+                        </td>
+                        <td className="py-2 pr-3 text-xs text-ia-muted">{d.preparer ?? '—'}</td>
+                        <td className="py-2">
+                          {d.drive_url ? (
+                            <a
+                              href={d.drive_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-ia-teal hover:underline"
+                            >
+                              <ExternalLink size={10} /> Open
+                            </a>
+                          ) : (
+                            <span className="text-xs text-ia-muted">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* POSITION TAB - per-entity per-year tax position forecast */}
+      {activeTab === 'position' && !loading && (
+        currentYearRows.length === 0 ? (
           <EmptyState
-            title="No filed records yet"
-            description="Once a tax_calendar entry hits status filed/paid/amended, it shows up here with linked payments."
+            title="No forecast data"
+            description="The tax_position_forecast_view needs monthly_pl rows for the current year and tax_entity_profiles rows for each active entity."
           />
         ) : (
-          <div className="ia-card overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="text-left text-xs uppercase text-ia-muted border-b border-ia-border">
-                <tr>
-                  <th className="pb-2 pr-3 font-medium">Filed</th>
-                  <th className="pb-2 pr-3 font-medium">Entity</th>
-                  <th className="pb-2 pr-3 font-medium">Jurisdiction</th>
-                  <th className="pb-2 pr-3 font-medium">Type</th>
-                  <th className="pb-2 pr-3 font-medium">Period</th>
-                  <th className="pb-2 pr-3 font-medium text-right">Paid</th>
-                  <th className="pb-2 font-medium">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {applyJurisdictionFilter(filed).map((c) => (
-                  <tr key={c.id} className="border-b border-ia-border last:border-0">
-                    <td className="py-2 pr-3 whitespace-nowrap">{c.filed_date ? fmtDate(c.filed_date) : '—'}</td>
-                    <td className="py-2 pr-3 text-xs">{c.entities?.entity_short_name ?? `#${c.entity_id}`}</td>
-                    <td className="py-2 pr-3 text-xs">{c.jurisdiction}</td>
-                    <td className="py-2 pr-3 text-xs">{c.filing_type}</td>
-                    <td className="py-2 pr-3 text-xs text-ia-muted">{c.period_covered}</td>
-                    <td className="py-2 pr-3 text-right">{fmtCurrency(c.amount_paid)}</td>
-                    <td className="py-2">
-                      <span className={cn(STATUS_PILL[c.status] ?? 'ia-pill-muted', 'text-[10px]')}>
-                        {c.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="space-y-6">
+            {/* Aggregate summary across all entities */}
+            <div>
+              <SectionHeader
+                title="All entities — current year position"
+                subtitle={`${aggregatePosition.months_recorded} months recorded · ${aggregatePosition.entity_count} entities (${aggregatePosition.on_track_count} on track, ${aggregatePosition.loss_year_count} loss year)`}
+              />
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+                <div className="ia-card">
+                  <div className="text-[10px] uppercase font-medium text-ia-muted">YTD revenue</div>
+                  <div className="text-xl font-semibold text-ia-navy mt-1">{fmtCurrency(aggregatePosition.ytd_revenue)}</div>
+                  <div className="text-xs text-ia-muted mt-1">Projects ~{fmtCurrency(aggregatePosition.projected_annual_revenue)} full year</div>
+                </div>
+                <div className="ia-card">
+                  <div className="text-[10px] uppercase font-medium text-ia-muted">YTD net income</div>
+                  <div className={cn('text-xl font-semibold mt-1', aggregatePosition.ytd_net_income < 0 ? 'text-red-700' : 'text-ia-navy')}>
+                    {fmtCurrency(aggregatePosition.ytd_net_income)}
+                  </div>
+                  <div className={cn('text-xs mt-1', yoyColor(aggregatePosition.yoy_net_income_pct))}>
+                    {fmtPct(aggregatePosition.yoy_net_income_pct)} vs same period last year
+                  </div>
+                </div>
+                <div className="ia-card">
+                  <div className="text-[10px] uppercase font-medium text-ia-muted">Projected annual NI</div>
+                  <div className={cn('text-xl font-semibold mt-1', aggregatePosition.projected_annual_net_income < 0 ? 'text-red-700' : 'text-ia-navy')}>
+                    {fmtCurrency(aggregatePosition.projected_annual_net_income)}
+                  </div>
+                  <div className="text-xs text-ia-muted mt-1">linear extrapolation from YTD</div>
+                </div>
+                <div className="ia-card">
+                  <div className="text-[10px] uppercase font-medium text-ia-muted">Est. federal liability</div>
+                  <div className="text-xl font-semibold text-ia-navy mt-1">{fmtCurrency(aggregatePosition.est_federal_tax_liability_projected)}</div>
+                  <div className="text-xs text-ia-muted mt-1">
+                    {aggregatePosition.payments_made > 0
+                      ? `${fmtCurrency(aggregatePosition.payments_made)} paid · gap ${fmtCurrency(aggregatePosition.gap)}`
+                      : 'no payments tracked yet'}
+                  </div>
+                </div>
+              </div>
+              <div className="text-xs text-ia-muted italic mt-2">
+                Pass-through entities (1120S/1065) use a 32% placeholder bracket. Tune via tax_entity_profiles.notes.
+              </div>
+            </div>
+
+            {/* Per-entity position cards */}
+            <div>
+              <SectionHeader title="Per-entity position" subtitle="Each entity's current year vs prior year for forecasting" />
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mt-3">
+                {Array.from(forecastByEntity.values())
+                  .map((rows) => rows.find((r) => r.is_current_year))
+                  .filter(Boolean)
+                  .sort((a, b) => (a.entity_short_name ?? '').localeCompare(b.entity_short_name ?? ''))
+                  .map((cur) => {
+                    const rows = forecastByEntity.get(cur.entity_id) ?? [];
+                    const prior = rows.find((r) => r.tax_year === cur.tax_year - 1);
+                    const twoBack = rows.find((r) => r.tax_year === cur.tax_year - 2);
+                    const health = TAX_HEALTH_LABEL[cur.tax_health] ?? TAX_HEALTH_LABEL.no_data;
+                    const niPositive = Number(cur.ytd_net_income ?? 0) >= 0;
+                    const projPositive = Number(cur.projected_annual_net_income ?? 0) >= 0;
+                    const gap = Math.max(0, Number(cur.est_federal_tax_liability_projected ?? 0) - Number(cur.payments_made ?? 0));
+                    return (
+                      <div key={cur.entity_id} className="ia-card">
+                        <div className="flex items-start justify-between gap-2 mb-3">
+                          <div className="flex items-start gap-2 min-w-0">
+                            <Building2 size={14} className="text-ia-teal mt-0.5" />
+                            <div className="min-w-0">
+                              <div className="font-medium text-ia-navy truncate">{cur.entity_short_name}</div>
+                              <div className="text-xs text-ia-muted">
+                                {FILER_TYPE_LABEL[cur.federal_filing_type] ?? cur.federal_filing_type} · {cur.primary_state ?? cur.state}
+                              </div>
+                            </div>
+                          </div>
+                          <span className={cn(health.pill, 'text-[10px] whitespace-nowrap')}>{health.label}</span>
+                        </div>
+
+                        {/* Current year vs prior year side-by-side */}
+                        <div className="grid grid-cols-2 gap-3 text-xs">
+                          <div>
+                            <div className="text-[10px] uppercase font-medium text-ia-muted">YTD {cur.tax_year}</div>
+                            <div className="text-ia-navy font-medium mt-1">Rev {fmtCurrency(cur.ytd_revenue)}</div>
+                            <div className={cn('font-medium', niPositive ? 'text-ia-navy' : 'text-red-700')}>
+                              NI {fmtCurrency(cur.ytd_net_income)}
+                            </div>
+                            <div className="text-ia-muted mt-0.5">{cur.months_recorded} months in</div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] uppercase font-medium text-ia-muted">Same period {cur.tax_year - 1}</div>
+                            <div className="text-ia-navy mt-1">Rev {fmtCurrency(cur.py_same_period_revenue)}</div>
+                            <div className={Number(cur.py_same_period_net_income ?? 0) < 0 ? 'text-red-700' : 'text-ia-navy'}>
+                              NI {fmtCurrency(cur.py_same_period_net_income)}
+                            </div>
+                            <div className={cn('mt-0.5', yoyColor(cur.yoy_net_income_pct))}>
+                              {cur.yoy_net_income_pct != null ? (
+                                <>
+                                  {Number(cur.yoy_net_income_pct) > 0 ? <TrendingUp size={10} className="inline mr-0.5" /> :
+                                   Number(cur.yoy_net_income_pct) < 0 ? <TrendingDown size={10} className="inline mr-0.5" /> :
+                                   <Minus size={10} className="inline mr-0.5" />}
+                                  NI {fmtPct(cur.yoy_net_income_pct)}
+                                </>
+                              ) : '—'}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Full year projection */}
+                        <div className="mt-3 pt-3 border-t border-ia-border">
+                          <div className="text-[10px] uppercase font-medium text-ia-muted flex items-center gap-1">
+                            <Target size={10} /> Full year projection
+                          </div>
+                          <div className="grid grid-cols-2 gap-3 text-xs mt-1">
+                            <div>
+                              <div className="text-ia-muted">Projected rev</div>
+                              <div className="text-ia-navy font-medium">{fmtCurrency(cur.projected_annual_revenue)}</div>
+                            </div>
+                            <div>
+                              <div className="text-ia-muted">Projected NI</div>
+                              <div className={cn('font-medium', projPositive ? 'text-ia-navy' : 'text-red-700')}>
+                                {fmtCurrency(cur.projected_annual_net_income)}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Federal tax liability */}
+                        <div className="mt-3 pt-3 border-t border-ia-border">
+                          <div className="text-[10px] uppercase font-medium text-ia-muted">Federal tax position</div>
+                          <dl className="text-xs grid grid-cols-2 gap-x-3 gap-y-1 mt-1">
+                            <dt className="text-ia-muted">Est. liability (projected)</dt>
+                            <dd className="text-right text-ia-navy font-medium">{fmtCurrency(cur.est_federal_tax_liability_projected)}</dd>
+                            <dt className="text-ia-muted">Payments YTD</dt>
+                            <dd className="text-right">{fmtCurrency(cur.payments_made)}</dd>
+                            <dt className="text-ia-muted font-medium">Gap</dt>
+                            <dd className={cn('text-right font-medium', gap > 0 ? 'text-amber-700' : 'text-emerald-700')}>
+                              {fmtCurrency(gap)}
+                            </dd>
+                          </dl>
+                        </div>
+
+                        {/* Prior-year trend */}
+                        {(prior || twoBack) && (
+                          <div className="mt-3 pt-3 border-t border-ia-border">
+                            <div className="text-[10px] uppercase font-medium text-ia-muted">Trend (full-year actuals)</div>
+                            <div className="grid grid-cols-2 gap-3 text-xs mt-1">
+                              {twoBack && (
+                                <div>
+                                  <div className="text-ia-muted">{twoBack.tax_year}</div>
+                                  <div className={Number(twoBack.ytd_net_income ?? 0) < 0 ? 'text-red-700' : 'text-ia-navy'}>
+                                    {fmtCurrency(twoBack.ytd_net_income)}
+                                  </div>
+                                </div>
+                              )}
+                              {prior && (
+                                <div>
+                                  <div className="text-ia-muted">{prior.tax_year}</div>
+                                  <div className={Number(prior.ytd_net_income ?? 0) < 0 ? 'text-red-700' : 'text-ia-navy'}>
+                                    {fmtCurrency(prior.ytd_net_income)}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Filing status */}
+                        {cur.filing_status && (
+                          <div className="mt-3 pt-3 border-t border-ia-border flex items-center justify-between text-xs">
+                            <span className="text-ia-muted">Annual return ({cur.tax_year})</span>
+                            <span className={cn(STATUS_PILL[cur.filing_status] ?? 'ia-pill-muted', 'text-[10px]')}>
+                              {cur.filing_status}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
           </div>
         )
       )}
