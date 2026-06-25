@@ -1,97 +1,109 @@
 # Next-session pickup — Tax forecast + HR module (BCC)
 
-**Last updated:** 2026-06-25, end of "C path" session  
-**Status:** Phases 1–3 complete. Data is live in the webapp.
+**Last updated:** 2026-06-25, end of "C path + Fix A + Fix B" session
+**Status:** Phases 1–3 complete; Fixes A + B shipped; Phase C (Rebecca inventory transfer question) queued as alert #363.
 
 ## What's in place now
 
 ### Database (all live on `qlcwzlejluyluunjhtki`)
 
-**Tax module — bridge data + forecast view:**
-- `tax_entity_profiles` — 11 rows, one per active entity, federal/state filing type, primary state, payroll states, preparer placeholder "External CPA via Rebecca / TBD". Each row notes "CONFIRM with Jay" for SMLLC status on entities 11/12/13.
-- `tax_calendar` — 22 rows:
-  - 8 `filed` (TY 2025) for entities 3,4,5,6,9,10,11,13 — `filed_date='2026-06-25'`
-  - 3 `overdue` (TY 2025) for entities 7 (Cosmic Corner), 8 (Emporium), 12 (Sunshine Property Investments) — missing from Rebecca's batch, flagged for follow-up
-  - 11 `upcoming` (TY 2026) for all active entities — `due_date='2027-03-15'`
-- `tax_documents` — 8 rows, `document_type='tax_return'`, `document_status='filed'`, `drive_url` populated to per-entity Drive folders
-- `tax_filings` — 8 rows mirror-linked to tax_documents
-- `documents` — 8 rows `category='tax'`, full-text searchable
+**Tax module — bridge data + forecast view v2:**
+- `tax_entity_profiles` — 11 rows, one per active entity, federal/state filing type, primary state, payroll states, preparer placeholder. SMLLC status TBD on entities 11/12/13.
+- `tax_calendar` — 22 rows: 8 filed TY 2025, 3 overdue TY 2025 (entities 7, 8, 12 not in Rebecca's batch), 11 upcoming TY 2026 due 2027-03-15.
+- `tax_documents` / `tax_filings` — 8 rows each for filed TY 2025 returns; Drive URLs point to `tax/<entity-slug>/2025/`.
+- `documents` — 8 rows `category='tax'`, full-text searchable.
 
-**Forecast view:** `public.tax_position_forecast_view` (33 rows = 11 entities × 3 years)  
-One row per (entity, tax_year) for current_year, current_year - 1, current_year - 2. Key columns:
-- `ytd_revenue`, `ytd_net_income`, `months_recorded`
-- `projected_annual_net_income` (linear extrapolation 12/months for current year, actuals for closed years)
-- `py_same_period_net_income`, `py_same_period_revenue` (matched-month prior year)
-- `yoy_net_income_pct`, `yoy_revenue_pct`
-- `est_federal_tax_liability_projected` (21% for 1120, 32% placeholder for 1120S/1065 pass-through to owner)
-- `est_federal_tax_liability_ytd`
-- `payments_made` (from tax_payments)
-- `filing_status`, `filed_date`, `amount_paid_per_calendar`
-- `tax_health`: `on_track` | `under_paying` | `no_payments_made` | `loss_year` | `no_data` | `closed`
-- `is_current_year`, `as_of_date`
+**Forecast view (v2 as of migration 032):** `public.tax_position_forecast_view` — 33 rows (11 entities × 3 years). Columns:
+- YTD: `ytd_revenue`, `ytd_net_income`, `ytd_gross_profit`, `months_recorded`, `first_period`, `last_period`
+- Projection: `projected_annual_revenue`, `projected_annual_net_income` (linear × 12/months for current year, actuals for closed)
+- PY comparison: `py_same_period_revenue`, `py_same_period_net_income`, `yoy_revenue_pct`, `yoy_net_income_pct`
+- Federal liability: `est_federal_tax_liability_projected`, `est_federal_tax_liability_ytd` (21% C-Corp, 32% pass-through placeholder), `payments_made`
+- Status: `filing_status`, `filed_date`, `amount_paid_per_calendar`
+- **Health pill** `tax_health`: `on_track` (1120 with payments ≥ threshold) · **`owner_k1` (1120S/1065 with positive NI)** · `under_paying` · `no_payments_made` · `loss_year` · `no_data` · `closed`
+- **Outlier flag** `projection_quality`: `clean` · `outlier_distorted` (a single month > 40% of |YTD| activity) · `na`
+- Outlier columns: `max_month_share_of_activity_pct`, `outlier_period`, `outlier_period_net_income`
 
-**HR module — bridge data:**
-- `employees` — 86 rows from `payroll_summaries.raw_row`; 23 marked `terminated` based on '*' prefix in QB Name; rest `active`. No phone/email/address yet — populate via HR UI as Jay onboards.
-- `employee_entity_assignments` — 96 rows, one per (employee, entity); `is_primary=true` on lowest entity_id per employee
-- `payroll_history` — 96 rows, one per (employee, entity) for the YTD H1 2026 period 2026-01-01 → 2026-06-30, pay_date='2026-06-30'. All federal/state/FICA/Medicare/FUTA/SUTA/STL City breakdowns extracted from `payroll_summaries.raw_row` JSONB.
+**HR module — bridge data live:**
+- 86 `employees` (23 terminated, 63 active)
+- 96 `employee_entity_assignments`
+- 96 `payroll_history` rows for YTD H1 2026 (period 2026-01-01 → 2026-06-30, pay_date 2026-06-30) with full federal/state/FICA/Medicare/FUTA/SUTA/STL City breakdowns
 
-### Webapp updates (live on main; Vercel auto-deploys)
+### Webapp updates live on main
 
-**TaxCenter.jsx** (commit 43c8b427, file sha cf0b8fc2):
-- New **Position tab** between History and Profiles
-- Aggregate summary card: all-entity YTD revenue/NI, projected annual NI, est federal liability, payments gap, on-track/loss-year counts
-- Per-entity cards: current YTD vs prior-year same period, YoY % with up/down/flat icons, full-year projection, federal tax position with payments gap, 2-year actuals trend, filing status pill
-- New `tax_health` pill (`on_track` / `under_paying` / `loss_year` / `no_payments_made` / `no_data` / `closed`)
-- History tab augmented with "Tax document archive" panel listing tax_documents with Drive open-links
-- Filed & paid table now shows a Drive PDF link in each row when tax_documents has a match for `entity_id + tax_year`
+| Commit | What |
+|---|---|
+| `43c8b427` | TaxCenter.jsx Position tab + Filed Returns Drive-link panel |
+| `7628c819` | Initial NEXT_SESSION_TAX_HR_BCC.md |
+| `c4298d5b` | Migration 031 back-ported to repo |
+| **`b1c2bd13`** | **Fix A + Fix B: `owner_k1` pill + outlier projection warning** |
+| **`4a7a568e`** | **Migration 032 (forecast view v2) back-ported** |
 
-**HRPeople.jsx** — no code changes needed. Its existing queries (`employees`, `employee_entity_assignments`, `payroll_history`) now have data. Roster, Payroll, and assignment cards populate automatically.
+HRPeople.jsx queries `employees`, `employee_entity_assignments`, `payroll_history` — populated automatically from the bridge data.
+
+### Open data-quality question (Phase C queued)
+
+**system_alerts #363** (severity=warning, category=data_quality) opened 2026-06-25 PM:
+> Feb 2026 anomaly: probable inter-company inventory transfer between Emporium (entity 8) and Sunshine Daydream (entity 5) — confirm with Rebecca
+
+The numbers:
+- Emporium Feb 2026: COGS -$303,688 (NEGATIVE — inventory removed at zero cost), producing $296,266 NI in one month. Mar-May 2026 all show $0 revenue and essentially no activity. Feb alone = 89% of YTD activity. Linear projection now shows +$799K annual NI which is misleading.
+- Sunshine Daydream Feb 2026: COGS $406,107 on revenue of $97,814, producing -$364,935 NI in one month. Feb alone = 87% of YTD activity. Linear projection now shows -$824K annual NI which is misleading.
+
+Magnitudes and directions strongly suggest a Feb 2026 inventory transfer **from Emporium → Sunshine Daydream**. Webapp Position tab now flags both as `projection_quality='outlier_distorted'` and shows an amber warning under Full year projection.
+
+**Questions for Rebecca (queued, not sent):**
+1. Was there an inventory transfer between Emporium (entity 8) and Sunshine Daydream (entity 5) in Feb 2026?
+2. If yes, was it booked correctly on both books? Emporium had a negative COGS that month (-$303,688).
+3. Are Emporium operations being wound down? Mar-May 2026 show $0 revenue and effectively no activity.
+4. Should the 2026 projections exclude Feb for these two entities?
+
+**Hold the draft until Jay reviews and approves sending.**
 
 ## Pending work for next Claude session
 
+### Tied to Phase C (Rebecca answers)
+
+1. **Process Rebecca's answers.** If confirmed inter-company transfer: add `excluded_periods` JSONB column on `tax_entity_profiles` so the forecast view can skip one-time months when projecting. If Emporium is winding down: mark entity as `is_active=false` (after EOY) and adjust the active-entity count.
+
 ### High value — finish the Tax module vision
 
-1. **Monthly snapshot recipe.** Build an automation recipe that, on the 1st of each month, snapshots `tax_position_forecast_view` rows for current year into a new table `tax_position_history` (or write to `agent_memory` as a session_note). Email Jay a one-page summary: aggregate YTD vs PY same period, top 3 entities by projected liability change, any entity flipped to `under_paying`. Hook into existing `automation_runner` v5.1.
+2. **Monthly snapshot recipe.** Build an `automation_recipe` row that, on the 1st of each month, snapshots `tax_position_forecast_view` rows into a new `tax_position_history` table. Email Jay a one-pager: aggregate YTD vs PY same period, top 3 entities by projected liability change, any entity whose `tax_health` flipped, any new `outlier_distorted` flags. Hook into existing `automation_runner` v5.1.
 
-2. **State minimum/franchise tax seeding.** Currently `tax_calendar` only has federal annual returns. Add state minimum/franchise tax entries:
-   - IL: $300 minimum franchise (entity 3)
-   - MO: corporate franchise/state corp/state partnership returns (all MO entities)
-   - WI: state partnership filing (entity 7)
-   Default to due 2027-04-15 for state returns. Set `amount_due_est` to known minimums.
+3. **State minimum/franchise tax seeding.** IL: $300 minimum franchise (entity 3). MO: state corp / state partnership returns (all MO entities). WI: state partnership filing (entity 7). Default to due 2027-04-15.
 
-3. **Sales tax remittance schedule.** Several entities collect sales tax. Without knowing which (need Jay to confirm), add a stub row to `system_alerts` asking him to identify the entities and their state-level filing frequency. Then seed monthly `tax_calendar` entries with `filing_type='other'`, `period_covered='monthly'`.
+4. **Sales tax remittance schedule.** Need Jay to identify which entities collect sales tax + frequency, then seed monthly `tax_calendar` entries.
 
-4. **Owner-bracket placeholder.** The forecast view uses 32% as a placeholder for pass-through (1120S/1065) owner liability. Replace with Jay's actual marginal federal bracket once he confirms. Recommendation: store as `client_context.tax_bracket_estimate` or add a column to `tax_entity_profiles` like `pass_through_owner_rate`.
+5. **Owner-bracket placeholder.** Forecast uses 32% for pass-through. Replace with Jay's actual marginal bracket (recommendation: store as `client_context` field or add `pass_through_owner_rate` column to `tax_entity_profiles`).
 
-5. **GL revised 2025 backfill (deferred).** The 10 EOY revised reports each had a `GL.xlsx` file the parser couldn't handle under WORKER_RESOURCE_LIMIT. The Drive file IDs are stashed in `ingest_log.error_details->gl_file_held_for_separate_load` for ingest rows 3792-3801. If Jay wants the revised 2025 GL loaded, use the `gl-bulk-insert` edge function pattern (bash + xargs -P 8 + curl posting 2000-row JSON chunks). Existing 225,797 rows in `gl_entries_archive` from prior backfill may already be current.
+6. **GL revised 2025 backfill (deferred).** Drive file IDs stashed in `ingest_log.error_details->gl_file_held_for_separate_load` for ingest rows 3792-3801. Use `gl-bulk-insert` edge function if needed.
 
 ### Medium value — HR module polish
 
-6. **HR profile fields.** Employees imported with name only. As Jay opens employee records, the UI should prompt for phone/email/role_title/hire_date/SSN last 4. Consider building a "complete profile" UI prompt for incomplete employees.
+7. **HR profile fields.** Employees have name only. Prompt for phone/email/role_title/hire_date/SSN last 4 as Jay opens records.
 
-7. **YTD payroll summary by entity.** HRPeople currently shows recent per-row payroll. Add a "By entity" rollup view showing each entity's H1 2026 gross/net/total taxes/total deductions — pulls from existing payroll_history with a GROUP BY.
-
-8. **Per-employee year-over-year.** Once we have multiple payroll periods, add a per-employee YoY view (current YTD vs same period prior year).
+8. **YTD payroll summary by entity.** Add a "By entity" rollup view in HRPeople.jsx showing each entity's H1 2026 gross/net/total taxes/total deductions.
 
 ### Data quality follow-ups for Jay (carry forward)
 
-- **Confirm SMLLC vs multi-member** on entities 11 (Daydream Properties), 12 (Sunshine Property Investments), 13 (Sugar Magnolia Properties). Affects whether 1065 is correct or whether they're disregarded entities reported on the owner's 1040.
+- **Confirm SMLLC vs multi-member** on entities 11 (Daydream Properties), 12 (Sunshine Property Investments), 13 (Sugar Magnolia Properties).
 - **Follow up with Rebecca on missing 2025 returns** for Cosmic Corner (7), Emporium (8), Sunshine Property Investments (12).
-- **Pass-through owner bracket** — confirm 32% is right or override.
+- **Confirm Feb 2026 inter-company transfer** (alert #363).
 
 ## Key identifiers
 
 - Supabase project: `qlcwzlejluyluunjhtki` (us-east-2)
-- Repo: `jayclaudeai2026-spec/SunshineDayDreamBCC`, at migration 030 + tax_position_forecast_view (DB-only, not back-ported as migration yet)
+- Repo: `jayclaudeai2026-spec/SunshineDayDreamBCC`
+- Migrations through: **032** (forecast view v2)
 - bcc_root Drive: `1DlDGi-lRkJmQIUsIWXbugDRn46DbllPr`
-- tax_root Drive (new this session): `1D8GV_IeSKwCiCo8iEkk4L-0KzhybX_Tk`
-- TaxCenter.jsx after this session: commit `43c8b4272a73965acf4eec4bd50aacea124cc4a9`
+- tax_root Drive: `1D8GV_IeSKwCiCo8iEkk4L-0KzhybX_Tk`
+- TaxCenter.jsx as of session end: commit `b1c2bd1374ddade17c43db54e605c4739c7d0dc0`
 
 ## Capability notes worth carrying forward
 
-- **GL files choke the parser under WORKER_RESOURCE_LIMIT.** When ingesting QB Desktop EOY packages, surgically drop `*GL.xlsx` from `ingest_log.drive_file_ids` and `attachment_names` before firing parser; stash the GL Drive ID in `error_details->gl_file_held_for_separate_load` for later bulk-load via `gl-bulk-insert` edge function.
-- **Composio `GMAIL_GET_ATTACHMENT`** returns `data.file.s3url` only — no `s3key`. Cannot feed into `GOOGLEDRIVE_UPLOAD_FILE` (which needs s3key). Use `GOOGLEDRIVE_UPLOAD_FROM_URL` with `source_url=s3url` instead.
-- **`tax_entity_profiles.payroll_states`** is NOT NULL. Pass `ARRAY[]::text[]` for empty, not NULL.
-- **`tax_calendar.period_covered`** is text, not date. Format like `'TY 2025'` / `'TY 2026'`.
-- **`documents.source`** is enum-constrained: `{manual_upload, email_ingest, recipe_processor, webapp_upload}`. No custom values.
-- **pg_net.http_post** has a 5s default timeout. For parser calls that may run longer, pass `timeout_milliseconds := 120000`.
+- **GL files choke the parser under WORKER_RESOURCE_LIMIT.** Drop `*GL.xlsx` from `ingest_log.drive_file_ids` and `attachment_names` before firing parser; stash Drive ID in `error_details->gl_file_held_for_separate_load`. Re-load via `gl-bulk-insert` if needed.
+- **Composio `GMAIL_GET_ATTACHMENT`** returns `data.file.s3url` only (no `s3key`). Use `GOOGLEDRIVE_UPLOAD_FROM_URL` with `source_url=s3url`. The s3url expires in ~1 hour.
+- **`tax_entity_profiles.payroll_states`** is NOT NULL. Pass `ARRAY[]::text[]` for empty.
+- **`tax_calendar.period_covered`** is text, not date. Use `'TY 2025'` / `'TY 2026'`.
+- **`documents.source`** is enum-constrained: `{manual_upload, email_ingest, recipe_processor, webapp_upload}`.
+- **`pg_net.http_post`** has a 5s default timeout. Pass `timeout_milliseconds := 120000` for parser calls.
+- **Outlier detection threshold** in forecast view is 40% of total |NI| activity. Tunable in CASE statement of migration 032.
