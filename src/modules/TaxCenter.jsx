@@ -43,12 +43,25 @@ const STATUS_PILL = {
 
 const TAX_HEALTH_LABEL = {
   on_track:         { pill: 'ia-pill-success', label: 'On track' },
+  owner_k1:         { pill: 'ia-pill-warning', label: 'Owner K-1' },
   under_paying:     { pill: 'ia-pill-warning', label: 'Under paying' },
   no_payments_made: { pill: 'ia-pill-warning', label: 'No payments made' },
   loss_year:        { pill: 'ia-pill-muted',   label: 'Loss year' },
   no_data:          { pill: 'ia-pill-muted',   label: 'No data' },
   closed:           { pill: 'ia-pill-muted',   label: 'Closed' },
 };
+
+// Month abbreviations for outlier_period display
+const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function outlierMonthLabel(periodStr) {
+  if (!periodStr) return '';
+  // periodStr looks like '2026-02-01'
+  const m = /^(\d{4})-(\d{2})-/.exec(periodStr);
+  if (!m) return periodStr;
+  const yr = m[1];
+  const month = MONTH_ABBR[Number(m[2]) - 1] ?? m[2];
+  return `${month} ${yr}`;
+}
 
 const PAYMENT_TYPE_LABEL = {
   estimated_q1:        'Est. Q1',
@@ -663,6 +676,11 @@ export default function TaxCenter() {
                         <div className="mt-3 pt-3 border-t border-ia-border">
                           <div className="text-[10px] uppercase font-medium text-ia-muted flex items-center gap-1">
                             <Target size={10} /> Full year projection
+                            {cur.projection_quality === 'outlier_distorted' && (
+                              <span className="ia-pill-warning text-[10px] ml-auto inline-flex items-center gap-1">
+                                <AlertTriangle size={10} /> Skewed by {outlierMonthLabel(cur.outlier_period)}
+                              </span>
+                            )}
                           </div>
                           <div className="grid grid-cols-2 gap-3 text-xs mt-1">
                             <div>
@@ -676,6 +694,12 @@ export default function TaxCenter() {
                               </div>
                             </div>
                           </div>
+                          {cur.projection_quality === 'outlier_distorted' && (
+                            <div className="text-[11px] text-amber-700 bg-amber-50 rounded p-2 mt-2">
+                              {outlierMonthLabel(cur.outlier_period)} alone is {cur.max_month_share_of_activity_pct}% of YTD activity
+                              ({fmtCurrency(cur.outlier_period_net_income)} NI). Linear projection ×{(12 / (cur.months_recorded || 1)).toFixed(1)} likely misstates the trend — investigate before relying on the projected number.
+                            </div>
+                          )}
                         </div>
 
                         {/* Federal tax liability */}
