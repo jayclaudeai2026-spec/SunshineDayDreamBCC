@@ -12,7 +12,7 @@ import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, BarChart3, FileText, Brain, Workflow,
   Bell, Settings as SettingsIcon, ListChecks,
-  Megaphone, Users, Receipt, ShieldCheck, Sun, Moon,
+  Megaphone, Users, Receipt, ShieldCheck, Sun, Moon, Network,
 } from 'lucide-react';
 
 import NavItem from './components/NavItem.jsx';
@@ -38,6 +38,7 @@ import SocialMedia         from './modules/SocialMedia.jsx';
 import HRPeople            from './modules/HRPeople.jsx';
 import TaxCenter           from './modules/TaxCenter.jsx';
 import TeamAccess          from './modules/TeamAccess.jsx';
+import GroupFlowMap        from './modules/GroupFlowMap.jsx';
 
 // NAV entries. `key` matches public.bcc_modules.module_key so we can filter
 // based on the get_my_module_access() RPC response. `ownerOnly` forces the
@@ -53,6 +54,7 @@ const NAV = [
   { key: 'social',      to: '/social',                    label: 'Social Media',  icon: Megaphone },
   { key: 'hr',          to: '/hr',                        label: 'HR / People',   icon: Users },
   { key: 'tax',         to: '/tax',                       label: 'Tax Center',    icon: Receipt },
+  { key: 'group',       to: '/group',                     label: 'Group',         icon: Network },
   { key: 'settings',    to: '/settings',                  label: 'Settings',      icon: SettingsIcon },
   { key: 'team',        to: '/team',                      label: 'Team & Access', icon: ShieldCheck, ownerOnly: true },
 ];
@@ -206,6 +208,7 @@ export default function BCCApp() {
             <Route path="/social/*"     element={<GateRoute moduleKey="social"      allowedSet={allowedSet}><SocialMedia /></GateRoute>} />
             <Route path="/hr/*"         element={<GateRoute moduleKey="hr"          allowedSet={allowedSet}><HRPeople /></GateRoute>} />
             <Route path="/tax/*"        element={<GateRoute moduleKey="tax"         allowedSet={allowedSet}><TaxCenter /></GateRoute>} />
+            <Route path="/group/*"      element={<GateRoute moduleKey="group"       allowedSet={allowedSet}><GroupFlowMap /></GateRoute>} />
             <Route path="/settings/*"   element={<GateRoute moduleKey="settings"    allowedSet={allowedSet}><Settings /></GateRoute>} />
             <Route path="/team/*"       element={isOwner ? <TeamAccess /> : <Navigate to="/" replace />} />
             <Route path="*"             element={<Navigate to={visibleNav[0]?.to ?? '/'} replace />} />
