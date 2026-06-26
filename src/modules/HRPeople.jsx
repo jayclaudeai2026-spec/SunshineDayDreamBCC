@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   Users, Briefcase, Calendar, FileText, TrendingUp, TrendingDown,
   ChevronDown, ChevronRight, RefreshCw, AlertCircle, CheckCircle2, Mail, Phone,
+  Edit2, Save, X, Building2, UserPlus, MapPin,
 } from 'lucide-react';
 
 import SectionHeader from '../components/SectionHeader.jsx';
@@ -58,9 +59,288 @@ function fullName(emp) {
   return `${first} ${last}`.trim() || `Employee #${emp.id}`;
 }
 
+// ───────────────────────────────────────────────────────────────
+// ByEntityPayrollRollup — H1 2026 payroll totals grouped by entity.
+// Click a card to filter the roster to that entity.
+// ───────────────────────────────────────────────────────────────
+function ByEntityPayrollRollup({ payroll, onEntityClick, activeEntityFilter }) {
+  const byEntity = useMemo(() => {
+    const m = new Map();
+    for (const p of payroll) {
+      const eid = p.entity_id;
+      if (eid == null) continue;
+      if (!m.has(eid)) {
+        m.set(eid, {
+          entity_id: eid,
+          entity_short_name: p.entities?.entity_short_name ?? `entity#${eid}`,
+          gross_pay: 0,
+          total_taxes: 0,
+          total_deductions: 0,
+          net_pay: 0,
+          employee_ids: new Set(),
+        });
+      }
+      const row = m.get(eid);
+      row.gross_pay += Number(p.gross_pay ?? 0);
+      row.total_taxes += Number(p.total_taxes ?? 0);
+      row.total_deductions += Number(p.total_deductions ?? 0);
+      row.net_pay += Number(p.net_pay ?? 0);
+      row.employee_ids.add(p.employee_id);
+    }
+    return Array.from(m.values())
+      .map((r) => ({ ...r, employee_count: r.employee_ids.size }))
+      .sort((a, b) => b.gross_pay - a.gross_pay);
+  }, [payroll]);
+
+  const aggregate = useMemo(() => {
+    return byEntity.reduce(
+      (acc, r) => ({
+        gross_pay: acc.gross_pay + r.gross_pay,
+        net_pay: acc.net_pay + r.net_pay,
+        total_taxes: acc.total_taxes + r.total_taxes,
+        total_deductions: acc.total_deductions + r.total_deductions,
+      }),
+      { gross_pay: 0, net_pay: 0, total_taxes: 0, total_deductions: 0 }
+    );
+  }, [byEntity]);
+
+  if (byEntity.length === 0) return null;
+
+  return (
+    <div className="ia-card">
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
+        <div className="text-[10px] uppercase font-medium text-ia-muted inline-flex items-center gap-1">
+          <Building2 size={11} /> H1 2026 payroll by entity
+        </div>
+        <div className="text-[10px] text-ia-muted">
+          Total gross <span className="text-ia-navy font-medium">{fmtCurrency(aggregate.gross_pay)}</span>
+          {' · '}Net <span className="text-ia-navy font-medium">{fmtCurrency(aggregate.net_pay)}</span>
+          {activeEntityFilter != null && (
+            <button
+              onClick={() => onEntityClick(null)}
+              className="ml-2 inline-flex items-center gap-1 text-ia-teal hover:text-ia-navy"
+            >
+              <X size={10} /> Clear filter
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        {byEntity.map((r) => {
+          const isActive = activeEntityFilter === r.entity_id;
+          return (
+            <button
+              key={r.entity_id}
+              onClick={() => onEntityClick(isActive ? null : r.entity_id)}
+              className={cn(
+                'text-left p-2.5 rounded border transition-colors',
+                isActive
+                  ? 'border-ia-teal bg-ia-teal/5 ring-1 ring-ia-teal/30'
+                  : 'border-ia-border hover:border-ia-teal/50 bg-ia-cream/30'
+              )}
+            >
+              <div className="text-xs font-medium text-ia-navy mb-1 flex items-center justify-between">
+                <span className="truncate">{r.entity_short_name}</span>
+                <span className="text-[10px] text-ia-muted ml-1 shrink-0">{r.employee_count} ppl</span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[10px] text-ia-muted">
+                <span>Gross</span><span className="text-right text-ia-navy">{fmtCurrency(r.gross_pay)}</span>
+                <span>Taxes</span><span className="text-right">{fmtCurrency(r.total_taxes)}</span>
+                <span>Deductions</span><span className="text-right">{fmtCurrency(r.total_deductions)}</span>
+                <span className="pt-0.5 mt-0.5 border-t border-ia-border/50">Net</span>
+                <span className="text-right text-ia-navy font-medium pt-0.5 mt-0.5 border-t border-ia-border/50">{fmtCurrency(r.net_pay)}</span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ───────────────────────────────────────────────────────────────
+// EmployeeProfileEditor — quick-edit panel for profile fields.
+// Compact trigger when collapsed: warning pill if fields are missing,
+// muted "Edit profile" link if all populated.
+// ───────────────────────────────────────────────────────────────
+function EmployeeProfileEditor({ employee, onSaved }) {
+  const addr = employee.address ?? {};
+  const ec = employee.emergency_contact ?? {};
+  const addrEmpty = !addr || Object.keys(addr).length === 0 || (!addr.street && !addr.city && !addr.state && !addr.zip);
+  const ecEmpty = !ec || Object.keys(ec).length === 0 || (!ec.name && !ec.phone);
+
+  const missing = [];
+  if (!employee.role_title) missing.push('role_title');
+  if (!employee.email) missing.push('email');
+  if (!employee.phone) missing.push('phone');
+  if (!employee.hire_date) missing.push('hire_date');
+  if (!employee.ssn_last4) missing.push('ssn_last4');
+  if (addrEmpty) missing.push('address');
+  if (ecEmpty) missing.push('emergency_contact');
+
+  const [isOpen, setIsOpen] = useState(false);
+  const [v, setV] = useState({
+    role_title: employee.role_title ?? '',
+    email: employee.email ?? '',
+    phone: employee.phone ?? '',
+    hire_date: employee.hire_date ?? '',
+    ssn_last4: employee.ssn_last4 ?? '',
+    address_street: addr.street ?? '',
+    address_city: addr.city ?? '',
+    address_state: addr.state ?? '',
+    address_zip: addr.zip ?? '',
+    emergency_name: ec.name ?? '',
+    emergency_phone: ec.phone ?? '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const onSave = async () => {
+    setSaving(true);
+    setError(null);
+    const update = {};
+    if (v.role_title && v.role_title !== (employee.role_title ?? '')) update.role_title = v.role_title;
+    if (v.email && v.email !== (employee.email ?? '')) update.email = v.email;
+    if (v.phone && v.phone !== (employee.phone ?? '')) update.phone = v.phone;
+    if (v.hire_date && v.hire_date !== (employee.hire_date ?? '')) update.hire_date = v.hire_date;
+    if (v.ssn_last4 && v.ssn_last4 !== (employee.ssn_last4 ?? '')) {
+      const cleaned = String(v.ssn_last4).replace(/[^0-9]/g, '').slice(0, 4);
+      if (cleaned.length === 4) update.ssn_last4 = cleaned;
+    }
+    const newAddr = {
+      street: v.address_street || addr.street,
+      city: v.address_city || addr.city,
+      state: v.address_state || addr.state,
+      zip: v.address_zip || addr.zip,
+    };
+    const cleanedAddr = Object.fromEntries(Object.entries(newAddr).filter(([, val]) => val));
+    if (Object.keys(cleanedAddr).length > 0 && JSON.stringify(cleanedAddr) !== JSON.stringify(addr)) {
+      update.address = cleanedAddr;
+    }
+    const newEc = {
+      name: v.emergency_name || ec.name,
+      phone: v.emergency_phone || ec.phone,
+    };
+    const cleanedEc = Object.fromEntries(Object.entries(newEc).filter(([, val]) => val));
+    if (Object.keys(cleanedEc).length > 0 && JSON.stringify(cleanedEc) !== JSON.stringify(ec)) {
+      update.emergency_contact = cleanedEc;
+    }
+    if (Object.keys(update).length === 0) {
+      setSaving(false);
+      setIsOpen(false);
+      return;
+    }
+    const { error: err } = await supabase.from('employees').update(update).eq('id', employee.id);
+    setSaving(false);
+    if (err) {
+      setError(err.message);
+      return;
+    }
+    setIsOpen(false);
+    onSaved && onSaved();
+  };
+
+  if (!isOpen) {
+    return missing.length > 0 ? (
+      <button
+        onClick={() => setIsOpen(true)}
+        className="ia-pill-warning inline-flex items-center gap-1 text-[10px] hover:opacity-80"
+      >
+        <UserPlus size={10} /> Complete profile ({missing.length} missing)
+      </button>
+    ) : (
+      <button
+        onClick={() => setIsOpen(true)}
+        className="inline-flex items-center gap-1 text-[10px] text-ia-muted hover:text-ia-teal"
+      >
+        <Edit2 size={10} /> Edit profile
+      </button>
+    );
+  }
+
+  const inputCls = 'w-full text-xs px-2 py-1 border border-ia-border rounded bg-white focus:outline-none focus:border-ia-teal';
+  const labelCls = 'text-[10px] uppercase text-ia-muted font-medium mb-0.5';
+
+  return (
+    <div className="mt-2 p-3 bg-ia-cream/30 rounded border border-ia-border">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs font-medium text-ia-navy inline-flex items-center gap-1">
+          <Edit2 size={11} /> Edit profile
+        </div>
+        <button onClick={() => { setIsOpen(false); setError(null); }} className="text-ia-muted hover:text-ia-navy">
+          <X size={12} />
+        </button>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <div>
+          <div className={labelCls}>Role title</div>
+          <input type="text" className={inputCls} value={v.role_title} onChange={(e) => setV({ ...v, role_title: e.target.value })} placeholder="e.g. Store Manager" />
+        </div>
+        <div>
+          <div className={labelCls}>Hire date</div>
+          <input type="date" className={inputCls} value={v.hire_date} onChange={(e) => setV({ ...v, hire_date: e.target.value })} />
+        </div>
+        <div>
+          <div className={labelCls}>Email</div>
+          <input type="email" className={inputCls} value={v.email} onChange={(e) => setV({ ...v, email: e.target.value })} placeholder="name@example.com" />
+        </div>
+        <div>
+          <div className={labelCls}>Phone</div>
+          <input type="tel" className={inputCls} value={v.phone} onChange={(e) => setV({ ...v, phone: e.target.value })} placeholder="(555) 123-4567" />
+        </div>
+        <div>
+          <div className={labelCls}>SSN last 4</div>
+          <input type="text" maxLength={4} className={inputCls} value={v.ssn_last4} onChange={(e) => setV({ ...v, ssn_last4: e.target.value.replace(/[^0-9]/g, '').slice(0, 4) })} placeholder="0000" />
+        </div>
+        <div></div>
+        <div className="sm:col-span-2 mt-1">
+          <div className={cn(labelCls, 'inline-flex items-center gap-1')}><MapPin size={10}/> Address</div>
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-1">
+            <input type="text" className={cn(inputCls, 'sm:col-span-2')} value={v.address_street} onChange={(e) => setV({ ...v, address_street: e.target.value })} placeholder="Street" />
+            <input type="text" className={inputCls} value={v.address_city} onChange={(e) => setV({ ...v, address_city: e.target.value })} placeholder="City" />
+            <div className="flex gap-1">
+              <input type="text" className={cn(inputCls, 'flex-1')} maxLength={2} value={v.address_state} onChange={(e) => setV({ ...v, address_state: e.target.value.toUpperCase().slice(0,2) })} placeholder="ST" />
+              <input type="text" className={cn(inputCls, 'flex-1')} maxLength={10} value={v.address_zip} onChange={(e) => setV({ ...v, address_zip: e.target.value })} placeholder="ZIP" />
+            </div>
+          </div>
+        </div>
+        <div className="sm:col-span-2 mt-1">
+          <div className={labelCls}>Emergency contact</div>
+          <div className="grid grid-cols-2 gap-1">
+            <input type="text" className={inputCls} value={v.emergency_name} onChange={(e) => setV({ ...v, emergency_name: e.target.value })} placeholder="Name" />
+            <input type="tel" className={inputCls} value={v.emergency_phone} onChange={(e) => setV({ ...v, emergency_phone: e.target.value })} placeholder="Phone" />
+          </div>
+        </div>
+      </div>
+      {error && (
+        <div className="mt-2 text-[11px] text-red-700 bg-red-50 rounded p-1.5">
+          {error}
+        </div>
+      )}
+      <div className="flex justify-end gap-2 mt-2">
+        <button
+          onClick={() => { setIsOpen(false); setError(null); }}
+          className="ia-button-ghost text-xs"
+          disabled={saving}
+        >
+          Cancel
+        </button>
+        <button
+          onClick={onSave}
+          disabled={saving}
+          className="inline-flex items-center gap-1 px-3 py-1 bg-ia-teal text-white text-xs rounded hover:opacity-90 disabled:opacity-50"
+        >
+          <Save size={11} /> {saving ? 'Saving...' : 'Save'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function HRPeople() {
   const [activeTab, setActiveTab] = useState('roster');
   const [activeStatus, setActiveStatus] = useState('active');
+  const [activeEntityFilter, setActiveEntityFilter] = useState(null);
   const [expandedEmpId, setExpandedEmpId] = useState(null);
 
   const employeesQ = useSupabaseQuery(
@@ -155,10 +435,24 @@ export default function HRPeople() {
     return c;
   }, [employees]);
 
+  // employee_id -> Set(entity_ids) for filtering
+  const empToEntities = useMemo(() => {
+    const m = new Map();
+    for (const a of assignments) {
+      if (!m.has(a.employee_id)) m.set(a.employee_id, new Set());
+      m.get(a.employee_id).add(a.entity_id);
+    }
+    return m;
+  }, [assignments]);
+
   const filteredEmployees = useMemo(() => {
-    if (!activeStatus) return employees;
-    return employees.filter((e) => e.status === activeStatus);
-  }, [employees, activeStatus]);
+    let out = employees;
+    if (activeStatus) out = out.filter((e) => e.status === activeStatus);
+    if (activeEntityFilter != null) {
+      out = out.filter((e) => empToEntities.get(e.id)?.has(activeEntityFilter));
+    }
+    return out;
+  }, [employees, activeStatus, activeEntityFilter, empToEntities]);
 
   // Solo-operator detection: zero employees OR only owners/family with no W-2/1099 reports
   const isSoloOperator = useMemo(() => {
@@ -198,6 +492,15 @@ export default function HRPeople() {
           <span>Refresh</span>
         </button>
       </header>
+
+      {/* By-entity payroll rollup */}
+      {!loading && payroll.length > 0 && (
+        <ByEntityPayrollRollup
+          payroll={payroll}
+          activeEntityFilter={activeEntityFilter}
+          onEntityClick={(eid) => { setActiveEntityFilter(eid); setActiveTab('roster'); setExpandedEmpId(null); }}
+        />
+      )}
 
       {/* Tabs */}
       <div className="flex border-b border-ia-border">
@@ -337,6 +640,8 @@ export default function HRPeople() {
                           {emp.notes}
                         </div>
                       )}
+
+                      <EmployeeProfileEditor employee={emp} onSaved={refetchAll} />
                     </div>
                   )}
                 </div>
