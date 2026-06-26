@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   Workflow, Play, Pause, ChevronDown, ChevronRight, RefreshCw,
-  CheckCircle2, XCircle, Clock, AlertCircle, Cpu, Cable,
+  CheckCircle2, XCircle, Clock, AlertCircle, Cpu, Cable, Mail, FileText,
 } from 'lucide-react';
 
 import SectionHeader from '../components/SectionHeader.jsx';
@@ -53,7 +53,13 @@ const SORT_OPTIONS = [
   { key: 'recipe_key', label: 'Name' },
 ];
 
+const VIEW_TABS = [
+  { key: 'recipes',   label: 'Recipes' },
+  { key: 'templates', label: 'Templates' },
+];
+
 export default function Automations() {
+  const [activeView, setActiveView] = useState('recipes');
   const [activeFilter, setActiveFilter] = useState('all');  // all|active|disabled
   const [activeKind, setActiveKind] = useState('all');      // all|internal|composio
   const [activeCategory, setActiveCategory] = useState(null);
@@ -157,12 +163,34 @@ export default function Automations() {
             entirely.
           </p>
         </div>
-        <button className="ia-button-ghost" onClick={refetch} aria-label="Refresh recipes">
+        <button className="ia-button-ghost" onClick={refetch} aria-label="Refresh">
           <RefreshCw size={14} />
           <span>Refresh</span>
         </button>
       </header>
 
+      {/* View tabs: Recipes | Templates */}
+      <div className="flex border-b border-ia-border">
+        {VIEW_TABS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setActiveView(t.key)}
+            className={cn(
+              'inline-flex items-center gap-2 px-4 py-2 text-sm border-b-2 -mb-px transition-colors',
+              activeView === t.key
+                ? 'border-ia-teal text-ia-teal font-medium'
+                : 'border-transparent text-ia-muted hover:text-ia-navy'
+            )}
+          >
+            {t.key === 'recipes' ? <Workflow size={14} /> : <FileText size={14} />}
+            <span>{t.label}</span>
+          </button>
+        ))}
+      </div>
+
+      {activeView === 'templates' && <EmailTemplatesView />}
+
+      {activeView === 'recipes' && (<>
       {/* Filter row */}
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-2">
@@ -240,7 +268,99 @@ export default function Automations() {
           ))}
         </ul>
       )}
+      </>)}
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Email templates view (moved from Settings)
+// ---------------------------------------------------------------------------
+
+function EmailTemplatesView() {
+  const { data: templates, loading } = useSupabaseQuery(
+    () => supabase
+      .from('email_templates')
+      .select('*')
+      .order('category', { ascending: true })
+      .order('template_key', { ascending: true }),
+    [],
+  );
+  const [expandedId, setExpandedId] = useState(null);
+
+  if (loading) return <LoadingState />;
+  if (!templates || templates.length === 0) {
+    return (
+      <EmptyState
+        icon={Mail}
+        title="No email templates"
+        description="Templates are seeded by migration 003. Each automation recipe can reference a template by key."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="text-xs text-ia-muted">
+        Bodies and subjects used by COMPOSIO:step_chain recipes via GMAIL_SEND_EMAIL. Read-only — edit in Supabase Studio or via Claude.
+      </div>
+      {templates.map((t) => (
+        <div key={t.id} className="ia-card-tight">
+          <button type="button" onClick={() => setExpandedId(expandedId === t.id ? null : t.id)}
+            className="w-full flex items-start gap-2 text-left">
+            {expandedId === t.id
+              ? <ChevronDown size={16} className="text-ia-muted mt-0.5" />
+              : <ChevronRight size={16} className="text-ia-muted mt-0.5" />}
+            <div className="flex-1 min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium text-ia-navy text-sm">{t.display_name ?? t.template_key}</span>
+                <span className="ia-pill-muted">{t.category ?? 'uncategorized'}</span>
+                {t.is_active ? <span className="ia-pill-success">active</span> : <span className="ia-pill-muted">inactive</span>}
+              </div>
+              <div className="text-xs font-mono text-ia-muted mt-1">{t.template_key}</div>
+              <div className="text-xs text-ia-ink mt-1">
+                <span className="text-ia-muted">subject: </span>
+                {truncate(t.subject_template ?? t.subject_line ?? '—', 100)}
+              </div>
+              {t.description && <div className="text-xs text-ia-muted mt-1">{truncate(t.description, 160)}</div>}
+            </div>
+          </button>
+
+          {expandedId === t.id && (
+            <div className="mt-3 pt-3 border-t border-ia-border space-y-3">
+              <div>
+                <div className="text-xs font-medium text-ia-muted uppercase mb-1">Subject line</div>
+                <div className="text-sm font-mono bg-ia-cream-dark p-2 rounded">
+                  {t.subject_template ?? t.subject_line ?? '—'}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-medium text-ia-muted uppercase mb-1">HTML body (preview)</div>
+                <pre className="text-xs bg-ia-cream-dark p-3 rounded overflow-auto max-h-72 whitespace-pre-wrap break-words">
+                  {t.html_body_template ?? t.html_body ?? '—'}
+                </pre>
+              </div>
+              {t.text_body_template && (
+                <div>
+                  <div className="text-xs font-medium text-ia-muted uppercase mb-1">Plain-text body</div>
+                  <pre className="text-xs bg-ia-cream-dark p-3 rounded overflow-auto max-h-48 whitespace-pre-wrap">
+                    {t.text_body_template}
+                  </pre>
+                </div>
+              )}
+              {t.variable_schema && Object.keys(t.variable_schema).length > 0 && (
+                <div>
+                  <div className="text-xs font-medium text-ia-muted uppercase mb-1">Variables expected</div>
+                  <pre className="text-xs bg-ia-cream-dark p-3 rounded overflow-auto max-h-40 font-mono">
+                    {JSON.stringify(t.variable_schema, null, 2)}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
 

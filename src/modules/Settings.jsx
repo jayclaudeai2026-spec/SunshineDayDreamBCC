@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
-  Building2, Mail, FileText, Megaphone, Plug,
+  Building2, Mail, Plug,
   CheckCircle2, XCircle, AlertCircle, ChevronDown, ChevronRight, Star,
   Database, Cloud, Github, HardDrive, Calendar,
   Instagram, Facebook, Linkedin, Twitter, Youtube, Music2,
@@ -14,13 +14,11 @@ import { supabase } from '../lib/supabase.js';
 import {
   useClientContext, useSystemStatus, useEntities, useSupabaseQuery,
 } from '../lib/hooks.js';
-import { fmtDate, fmtRelative, cn, truncate } from '../lib/utils.js';
+import { fmtDate, fmtRelative, cn } from '../lib/utils.js';
 
 const TABS = [
   { key: 'context',     label: 'Client context',  icon: Building2 },
   { key: 'senders',     label: 'Email senders',   icon: Mail },
-  { key: 'templates',   label: 'Email templates', icon: FileText },
-  { key: 'social',      label: 'Social accounts', icon: Megaphone },
   { key: 'integrations',label: 'Integrations',    icon: Plug },
 ];
 
@@ -56,8 +54,6 @@ export default function Settings() {
 
       {activeTab === 'context'      && <ClientContextTab />}
       {activeTab === 'senders'      && <EmailSendersTab />}
-      {activeTab === 'templates'    && <EmailTemplatesTab />}
-      {activeTab === 'social'       && <SocialAccountsTab />}
       {activeTab === 'integrations' && <IntegrationsTab />}
     </section>
   );
@@ -200,141 +196,6 @@ function EmailSendersTab() {
                   : <span className="text-xs text-ia-muted">—</span>}
               </td>
               <td className="text-xs text-ia-muted">{s.notes ?? '—'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function EmailTemplatesTab() {
-  const { data: templates, loading } = useSupabaseQuery(
-    () => supabase
-      .from('email_templates')
-      .select('*')
-      .order('category', { ascending: true })
-      .order('template_key', { ascending: true }),
-    [],
-  );
-  const [expandedId, setExpandedId] = useState(null);
-
-  if (loading) return <LoadingState />;
-  if (!templates || templates.length === 0) {
-    return (
-      <EmptyState icon={FileText} title="No email templates"
-        description="The BCC master template ships exactly one template (ingest_receipt). It is seeded automatically by migration 003." />
-    );
-  }
-
-  return (
-    <div className="space-y-3">
-      {templates.map((t) => (
-        <div key={t.id} className="ia-card-tight">
-          <button type="button" onClick={() => setExpandedId(expandedId === t.id ? null : t.id)}
-            className="w-full flex items-start gap-2 text-left">
-            {expandedId === t.id
-              ? <ChevronDown size={16} className="text-ia-muted mt-0.5" />
-              : <ChevronRight size={16} className="text-ia-muted mt-0.5" />}
-            <div className="flex-1 min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium text-ia-navy text-sm">{t.display_name ?? t.template_key}</span>
-                <span className="ia-pill-muted">{t.category ?? 'uncategorized'}</span>
-                {t.is_active ? <span className="ia-pill-success">active</span> : <span className="ia-pill-muted">inactive</span>}
-              </div>
-              <div className="text-xs font-mono text-ia-muted mt-1">{t.template_key}</div>
-              <div className="text-xs text-ia-ink mt-1">
-                <span className="text-ia-muted">subject: </span>
-                {truncate(t.subject_template ?? t.subject_line ?? '—', 100)}
-              </div>
-              {t.description && <div className="text-xs text-ia-muted mt-1">{truncate(t.description, 160)}</div>}
-            </div>
-          </button>
-
-          {expandedId === t.id && (
-            <div className="mt-3 pt-3 border-t border-ia-border space-y-3">
-              <div>
-                <div className="text-xs font-medium text-ia-muted uppercase mb-1">Subject line</div>
-                <div className="text-sm font-mono bg-ia-cream-dark p-2 rounded">
-                  {t.subject_template ?? t.subject_line ?? '—'}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs font-medium text-ia-muted uppercase mb-1">HTML body (preview)</div>
-                <pre className="text-xs bg-ia-cream-dark p-3 rounded overflow-auto max-h-72 whitespace-pre-wrap break-words">
-                  {t.html_body_template ?? t.html_body ?? '—'}
-                </pre>
-              </div>
-              {t.text_body_template && (
-                <div>
-                  <div className="text-xs font-medium text-ia-muted uppercase mb-1">Plain-text body</div>
-                  <pre className="text-xs bg-ia-cream-dark p-3 rounded overflow-auto max-h-48 whitespace-pre-wrap">
-                    {t.text_body_template}
-                  </pre>
-                </div>
-              )}
-              {t.variable_schema && Object.keys(t.variable_schema).length > 0 && (
-                <div>
-                  <div className="text-xs font-medium text-ia-muted uppercase mb-1">Variables expected</div>
-                  <pre className="text-xs bg-ia-cream-dark p-3 rounded overflow-auto max-h-40 font-mono">
-                    {JSON.stringify(t.variable_schema, null, 2)}
-                  </pre>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function SocialAccountsTab() {
-  const { data: accounts, loading } = useSupabaseQuery(
-    () => supabase
-      .from('social_accounts')
-      .select('*, entities(entity_short_name, legal_name)')
-      .order('platform', { ascending: true })
-      .order('handle', { ascending: true }),
-    [],
-  );
-
-  if (loading) return <LoadingState />;
-  if (!accounts || accounts.length === 0) {
-    return (
-      <EmptyState icon={Megaphone} title="No social accounts configured"
-        description="Add accounts during install or via the Social Media module. Most clients run 1-3 platforms." />
-    );
-  }
-
-  return (
-    <div className="ia-card">
-      <SectionHeader title="Connected social accounts"
-        description="Posting method 'api' uses Composio; 'manual_daily' means a daily prompt for the operator to post by hand. Instagram is the typical manual_daily case." />
-      <table className="ia-table">
-        <thead><tr>
-          <th>Platform</th><th>Handle</th><th>Entity</th><th>Method</th><th>Active</th><th>Brand voice notes</th>
-        </tr></thead>
-        <tbody>
-          {accounts.map((a) => (
-            <tr key={a.id}>
-              <td><span className="ia-pill-info">{a.platform}</span></td>
-              <td className="font-mono text-xs">{a.handle}</td>
-              <td className="text-xs">
-                {a.entities ? (
-                  <>
-                    <div className="font-mono">{a.entities.entity_short_name}</div>
-                    <div className="text-ia-muted">{a.entities.legal_name}</div>
-                  </>
-                ) : '—'}
-              </td>
-              <td>
-                <span className={a.posting_method === 'api' ? 'ia-pill-success' : 'ia-pill-warning'}>
-                  {a.posting_method}
-                </span>
-              </td>
-              <td>{a.is_active ? <span className="ia-pill-success">on</span> : <span className="ia-pill-muted">off</span>}</td>
-              <td className="text-xs text-ia-muted">{truncate(a.brand_voice_notes, 100) ?? '—'}</td>
             </tr>
           ))}
         </tbody>
