@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   Users, Briefcase, Calendar, FileText, TrendingUp, TrendingDown,
   ChevronDown, ChevronRight, RefreshCw, AlertCircle, CheckCircle2, Mail, Phone,
-  Edit2, Save, X, Building2, UserPlus, MapPin, Search, ArrowUpDown,
+  Edit2, Save, X, Building2, UserPlus, MapPin, Search, ArrowUpDown, DollarSign,
 } from 'lucide-react';
 
 import SectionHeader from '../components/SectionHeader.jsx';
@@ -55,8 +55,9 @@ const NOTE_CATEGORY_STYLE = {
 
 function fullName(emp) {
   const first = emp.preferred_name || emp.first_name || '';
+  const middle = emp.middle_initial && !emp.preferred_name ? ` ${emp.middle_initial}.` : '';
   const last = emp.last_name || '';
-  return `${first} ${last}`.trim() || `Employee #${emp.id}`;
+  return `${first}${middle} ${last}`.trim() || `Employee #${emp.id}`;
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -333,6 +334,95 @@ function EmployeeProfileEditor({ employee, onSaved }) {
           <Save size={11} /> {saving ? 'Saving...' : 'Save'}
         </button>
       </div>
+    </div>
+  );
+}
+
+
+// ───────────────────────────────────────────────────────────────
+// EmployeePayrollDetail — per-entity payroll breakdown pulled from
+// payroll_history. One row per (employee, entity) pair, plus a total
+// row when the employee has multiple entity assignments.
+// ───────────────────────────────────────────────────────────────
+function EmployeePayrollDetail({ employee, payroll }) {
+  const empPayroll = payroll.filter((p) => p.employee_id === employee.id);
+  if (empPayroll.length === 0) return null;
+
+  const totals = empPayroll.reduce(
+    (acc, p) => ({
+      gross: acc.gross + Number(p.gross_pay ?? 0),
+      fed: acc.fed + Number(p.federal_withholding ?? 0),
+      state: acc.state + Number(p.state_withholding ?? 0),
+      fica: acc.fica + Number(p.fica_employee ?? 0),
+      medicare: acc.medicare + Number(p.medicare_employee ?? 0),
+      suta: acc.suta + Number(p.suta ?? 0),
+      futa: acc.futa + Number(p.futa ?? 0),
+      fica_employer: acc.fica_employer + Number(p.fica_employer ?? 0),
+      medicare_employer: acc.medicare_employer + Number(p.medicare_employer ?? 0),
+      health: acc.health + Number(p.health_insurance ?? 0),
+      retirement_emp: acc.retirement_emp + Number(p.retirement_employee ?? 0),
+      retirement_er: acc.retirement_er + Number(p.retirement_employer ?? 0),
+      other_ded: acc.other_ded + Number(p.other_deductions ?? 0),
+      net: acc.net + Number(p.net_pay ?? 0),
+    }),
+    { gross: 0, fed: 0, state: 0, fica: 0, medicare: 0, suta: 0, futa: 0, fica_employer: 0, medicare_employer: 0, health: 0, retirement_emp: 0, retirement_er: 0, other_ded: 0, net: 0 }
+  );
+
+  const employerSideTotal = totals.fica_employer + totals.medicare_employer + totals.futa + totals.suta;
+
+  return (
+    <div className="mt-2">
+      <div className="text-[10px] uppercase font-medium text-ia-muted mb-1 inline-flex items-center gap-1">
+        <DollarSign size={10} /> Payroll detail · H1 2026 · {empPayroll.length} {empPayroll.length === 1 ? 'entity' : 'entities'}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[11px]">
+          <thead className="text-ia-muted">
+            <tr className="border-b border-ia-border">
+              <th className="font-medium py-1 pr-2 text-left">Entity</th>
+              <th className="font-medium py-1 px-1 text-right">Gross</th>
+              <th className="font-medium py-1 px-1 text-right">Fed</th>
+              <th className="font-medium py-1 px-1 text-right">State</th>
+              <th className="font-medium py-1 px-1 text-right">FICA+Med</th>
+              <th className="font-medium py-1 px-1 text-right">Other</th>
+              <th className="font-medium py-1 pl-1 text-right">Net</th>
+            </tr>
+          </thead>
+          <tbody>
+            {empPayroll.map((p) => {
+              const ficaMed = Number(p.fica_employee ?? 0) + Number(p.medicare_employee ?? 0);
+              const other = Number(p.health_insurance ?? 0) + Number(p.retirement_employee ?? 0) + Number(p.other_deductions ?? 0);
+              return (
+                <tr key={p.id} className="border-b border-ia-border/40 last:border-0">
+                  <td className="py-1 pr-2 text-ia-navy text-xs">{p.entities?.entity_short_name ?? `#${p.entity_id}`}</td>
+                  <td className="py-1 px-1 text-right text-ia-navy">{fmtCurrency(p.gross_pay)}</td>
+                  <td className="py-1 px-1 text-right text-ia-muted">{fmtCurrency(p.federal_withholding)}</td>
+                  <td className="py-1 px-1 text-right text-ia-muted">{fmtCurrency(p.state_withholding)}</td>
+                  <td className="py-1 px-1 text-right text-ia-muted">{fmtCurrency(ficaMed)}</td>
+                  <td className="py-1 px-1 text-right text-ia-muted">{fmtCurrency(other)}</td>
+                  <td className="py-1 pl-1 text-right font-medium text-ia-navy">{fmtCurrency(p.net_pay)}</td>
+                </tr>
+              );
+            })}
+            {empPayroll.length > 1 && (
+              <tr className="border-t border-ia-border font-medium bg-ia-cream/40">
+                <td className="py-1 pr-2 text-ia-navy">Total</td>
+                <td className="py-1 px-1 text-right text-ia-navy">{fmtCurrency(totals.gross)}</td>
+                <td className="py-1 px-1 text-right text-ia-muted">{fmtCurrency(totals.fed)}</td>
+                <td className="py-1 px-1 text-right text-ia-muted">{fmtCurrency(totals.state)}</td>
+                <td className="py-1 px-1 text-right text-ia-muted">{fmtCurrency(totals.fica + totals.medicare)}</td>
+                <td className="py-1 px-1 text-right text-ia-muted">{fmtCurrency(totals.health + totals.retirement_emp + totals.other_ded)}</td>
+                <td className="py-1 pl-1 text-right text-ia-navy">{fmtCurrency(totals.net)}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {employerSideTotal > 0 && (
+        <div className="text-[10px] text-ia-muted mt-1.5 italic">
+          Employer-side cost: FICA {fmtCurrency(totals.fica_employer)} · Medicare {fmtCurrency(totals.medicare_employer)} · FUTA {fmtCurrency(totals.futa)} · SUTA {fmtCurrency(totals.suta)} = {fmtCurrency(employerSideTotal)} total
+        </div>
+      )}
     </div>
   );
 }
@@ -650,6 +740,8 @@ export default function HRPeople() {
                           {emp.notes}
                         </div>
                       )}
+
+                      <EmployeePayrollDetail employee={emp} payroll={payroll} />
 
                       <EmployeeProfileEditor employee={emp} onSaved={refetchAll} />
                     </div>
