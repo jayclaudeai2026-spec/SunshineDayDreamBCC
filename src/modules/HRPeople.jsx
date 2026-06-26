@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   Users, Briefcase, Calendar, FileText, TrendingUp, TrendingDown,
   ChevronDown, ChevronRight, RefreshCw, AlertCircle, CheckCircle2, Mail, Phone,
-  Edit2, Save, X, Building2, UserPlus, MapPin,
+  Edit2, Save, X, Building2, UserPlus, MapPin, Search, ArrowUpDown,
 } from 'lucide-react';
 
 import SectionHeader from '../components/SectionHeader.jsx';
@@ -341,6 +341,9 @@ export default function HRPeople() {
   const [activeTab, setActiveTab] = useState('roster');
   const [activeStatus, setActiveStatus] = useState('active');
   const [activeEntityFilter, setActiveEntityFilter] = useState(null);
+  const [activeEmployeeType, setActiveEmployeeType] = useState(null);
+  const [sortBy, setSortBy] = useState('entity');
+  const [searchQuery, setSearchQuery] = useState('');
   const [expandedEmpId, setExpandedEmpId] = useState(null);
 
   const employeesQ = useSupabaseQuery(
@@ -445,14 +448,99 @@ export default function HRPeople() {
     return m;
   }, [assignments]);
 
+  // employee_id -> primary entity assignment (with embedded entities relation)
+  const primaryAssignmentByEmp = useMemo(() => {
+    const m = new Map();
+    for (const a of assignments) {
+      const existing = m.get(a.employee_id);
+      if (!existing) m.set(a.employee_id, a);
+      else if (a.is_primary && !existing.is_primary) m.set(a.employee_id, a);
+      else if (!existing.is_primary && a.entity_id < existing.entity_id) m.set(a.employee_id, a);
+    }
+    return m;
+  }, [assignments]);
+
+  // employee_id -> sum of H1 2026 gross pay
+  const grossByEmp = useMemo(() => {
+    const m = new Map();
+    for (const p of payroll) {
+      m.set(p.employee_id, (m.get(p.employee_id) ?? 0) + Number(p.gross_pay ?? 0));
+    }
+    return m;
+  }, [payroll]);
+
+  // Employee types present (for filter pills)
+  const employeeTypes = useMemo(() => {
+    const set = new Set(employees.map((e) => e.employee_type).filter(Boolean));
+    return Array.from(set);
+  }, [employees]);
+  const employeeTypeCounts = useMemo(() => {
+    const c = {};
+    for (const e of employees) c[e.employee_type] = (c[e.employee_type] ?? 0) + 1;
+    return c;
+  }, [employees]);
+
   const filteredEmployees = useMemo(() => {
     let out = employees;
     if (activeStatus) out = out.filter((e) => e.status === activeStatus);
     if (activeEntityFilter != null) {
       out = out.filter((e) => empToEntities.get(e.id)?.has(activeEntityFilter));
     }
-    return out;
-  }, [employees, activeStatus, activeEntityFilter, empToEntities]);
+    if (activeEmployeeType) {
+      out = out.filter((e) => e.employee_type === activeEmployeeType);
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      out = out.filter((e) => {
+        const name = `${e.preferred_name || ''} ${e.first_name || ''} ${e.last_name || ''}`.toLowerCase();
+        const title = (e.role_title || '').toLowerCase();
+        const email = (e.email || '').toLowerCase();
+        return name.includes(q) || title.includes(q) || email.includes(q);
+      });
+    }
+    const sorted = [...out];
+    if (sortBy === 'entity') {
+      sorted.sort((a, b) => {
+        const ea = primaryAssignmentByEmp.get(a.id);
+        const eb = primaryAssignmentByEmp.get(b.id);
+        const na = ea?.entities?.entity_short_name ?? 'zzz_unassigned';
+        const nb = eb?.entities?.entity_short_name ?? 'zzz_unassigned';
+        if (na !== nb) return na.localeCompare(nb);
+        return (a.last_name || '').localeCompare(b.last_name || '');
+      });
+    } else if (sortBy === 'name_asc') {
+      sorted.sort((a, b) => (a.last_name || '').localeCompare(b.last_name || '') || (a.first_name || '').localeCompare(b.first_name || ''));
+    } else if (sortBy === 'hire_desc' || sortBy === 'hire_asc') {
+      sorted.sort((a, b) => {
+        const da = a.hire_date || '';
+        const db = b.hire_date || '';
+        if (!da && !db) return 0;
+        if (!da) return 1;
+        if (!db) return -1;
+        return sortBy === 'hire_desc' ? db.localeCompare(da) : da.localeCompare(db);
+      });
+    } else if (sortBy === 'gross_desc') {
+      sorted.sort((a, b) => (grossByEmp.get(b.id) ?? 0) - (grossByEmp.get(a.id) ?? 0));
+    }
+    return sorted;
+  }, [employees, activeStatus, activeEntityFilter, activeEmployeeType, searchQuery, sortBy, empToEntities, primaryAssignmentByEmp, grossByEmp]);
+
+  // Grouped view when sortBy === 'entity'
+  const employeeGroups = useMemo(() => {
+    if (sortBy !== 'entity') return null;
+    const groups = [];
+    let currentKey = null;
+    for (const e of filteredEmployees) {
+      const pa = primaryAssignmentByEmp.get(e.id);
+      const key = pa?.entities?.entity_short_name ?? '(unassigned)';
+      if (currentKey !== key) {
+        groups.push({ entity: key, employees: [] });
+        currentKey = key;
+      }
+      groups[groups.length - 1].employees.push(e);
+    }
+    return groups;
+  }, [filteredEmployees, sortBy, primaryAssignmentByEmp]);
 
   // Solo-operator detection: zero employees OR only owners/family with no W-2/1099 reports
   const isSoloOperator = useMemo(() => {
@@ -477,85 +565,7 @@ export default function HRPeople() {
     notes:   notes.length,
   };
 
-  return (
-    <section className="space-y-6">
-      <header className="flex items-end justify-between gap-4">
-        <div>
-          <h1>People &amp; HR</h1>
-          <p className="text-sm text-ia-muted mt-1">
-            Roster, payroll history, time-off balances, and performance notes. SSN stored as
-            last-4 only; full SSN stays in your payroll provider.
-          </p>
-        </div>
-        <button className="ia-button-ghost" onClick={refetchAll} aria-label="Refresh">
-          <RefreshCw size={14} />
-          <span>Refresh</span>
-        </button>
-      </header>
-
-      {/* By-entity payroll rollup */}
-      {!loading && payroll.length > 0 && (
-        <ByEntityPayrollRollup
-          payroll={payroll}
-          activeEntityFilter={activeEntityFilter}
-          onEntityClick={(eid) => { setActiveEntityFilter(eid); setActiveTab('roster'); setExpandedEmpId(null); }}
-        />
-      )}
-
-      {/* Tabs */}
-      <div className="flex border-b border-ia-border">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => { setActiveTab(t.key); setExpandedEmpId(null); }}
-            className={cn(
-              'inline-flex items-center gap-2 px-4 py-2 text-sm border-b-2 -mb-px transition-colors',
-              activeTab === t.key
-                ? 'border-ia-teal text-ia-teal font-medium'
-                : 'border-transparent text-ia-muted hover:text-ia-navy'
-            )}
-          >
-            <span>{t.label}</span>
-            <span className={cn(
-              'inline-flex items-center justify-center min-w-[1.25rem] h-4 px-1 rounded-full text-[10px] font-semibold',
-              activeTab === t.key ? 'bg-ia-teal text-white' : 'bg-ia-cream-dark text-ia-muted'
-            )}>{counts[t.key]}</span>
-          </button>
-        ))}
-      </div>
-
-      {loading && <LoadingState label="Loading people data..." />}
-
-      {/* Solo-operator empty state on Roster */}
-      {activeTab === 'roster' && !loading && isSoloOperator && employees.length === 0 && (
-        <EmptyState
-          title="Just you for now"
-          description="Add team members in Supabase Studio (public.employees) when you hire. Owners and family members can be tracked here too."
-        />
-      )}
-
-      {/* ROSTER TAB */}
-      {activeTab === 'roster' && !loading && employees.length > 0 && (
-        <>
-          {/* Status filter pills */}
-          {statuses.length > 1 && (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-medium text-ia-muted uppercase mr-1">Status</span>
-              <FilterPill label="All" active={!activeStatus} onClick={() => setActiveStatus(null)} count={employees.length} />
-              {statuses.map((s) => (
-                <FilterPill
-                  key={s}
-                  label={s.replace('_', ' ')}
-                  active={activeStatus === s}
-                  onClick={() => setActiveStatus(s)}
-                  count={statusCounts[s]}
-                />
-              ))}
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {filteredEmployees.map((emp) => {
+  const renderEmployeeCard = (emp) => {
               const empAssignments = assignmentsByEmp.get(emp.id) ?? [];
               const empTimeOff = timeOffByEmp.get(emp.id) ?? [];
               const expanded = expandedEmpId === emp.id;
@@ -646,8 +656,166 @@ export default function HRPeople() {
                   )}
                 </div>
               );
-            })}
+};
+
+  return (
+    <section className="space-y-6">
+      <header className="flex items-end justify-between gap-4">
+        <div>
+          <h1>People &amp; HR</h1>
+          <p className="text-sm text-ia-muted mt-1">
+            Roster, payroll history, time-off balances, and performance notes. SSN stored as
+            last-4 only; full SSN stays in your payroll provider.
+          </p>
+        </div>
+        <button className="ia-button-ghost" onClick={refetchAll} aria-label="Refresh">
+          <RefreshCw size={14} />
+          <span>Refresh</span>
+        </button>
+      </header>
+
+      {/* By-entity payroll rollup */}
+      {!loading && payroll.length > 0 && (
+        <ByEntityPayrollRollup
+          payroll={payroll}
+          activeEntityFilter={activeEntityFilter}
+          onEntityClick={(eid) => { setActiveEntityFilter(eid); setActiveTab('roster'); setExpandedEmpId(null); }}
+        />
+      )}
+
+      {/* Tabs */}
+      <div className="flex border-b border-ia-border">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => { setActiveTab(t.key); setExpandedEmpId(null); }}
+            className={cn(
+              'inline-flex items-center gap-2 px-4 py-2 text-sm border-b-2 -mb-px transition-colors',
+              activeTab === t.key
+                ? 'border-ia-teal text-ia-teal font-medium'
+                : 'border-transparent text-ia-muted hover:text-ia-navy'
+            )}
+          >
+            <span>{t.label}</span>
+            <span className={cn(
+              'inline-flex items-center justify-center min-w-[1.25rem] h-4 px-1 rounded-full text-[10px] font-semibold',
+              activeTab === t.key ? 'bg-ia-teal text-white' : 'bg-ia-cream-dark text-ia-muted'
+            )}>{counts[t.key]}</span>
+          </button>
+        ))}
+      </div>
+
+      {loading && <LoadingState label="Loading people data..." />}
+
+      {/* Solo-operator empty state on Roster */}
+      {activeTab === 'roster' && !loading && isSoloOperator && employees.length === 0 && (
+        <EmptyState
+          title="Just you for now"
+          description="Add team members in Supabase Studio (public.employees) when you hire. Owners and family members can be tracked here too."
+        />
+      )}
+
+      {/* ROSTER TAB */}
+      {activeTab === 'roster' && !loading && employees.length > 0 && (
+        <>
+          {/* Status filter pills */}
+          {statuses.length > 1 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium text-ia-muted uppercase mr-1">Status</span>
+              <FilterPill label="All" active={!activeStatus} onClick={() => setActiveStatus(null)} count={employees.length} />
+              {statuses.map((s) => (
+                <FilterPill
+                  key={s}
+                  label={s.replace('_', ' ')}
+                  active={activeStatus === s}
+                  onClick={() => setActiveStatus(s)}
+                  count={statusCounts[s]}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Employee type filter pills */}
+          {employeeTypes.length > 1 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium text-ia-muted uppercase mr-1">Type</span>
+              <FilterPill label="All" active={!activeEmployeeType} onClick={() => setActiveEmployeeType(null)} count={employees.length} />
+              {employeeTypes.map((t) => (
+                <FilterPill
+                  key={t}
+                  label={EMPLOYEE_TYPE_LABEL[t] ?? t.replace('_', ' ')}
+                  active={activeEmployeeType === t}
+                  onClick={() => setActiveEmployeeType(t)}
+                  count={employeeTypeCounts[t]}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Search + Sort row */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex-1 min-w-[200px] max-w-md">
+              <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-ia-muted pointer-events-none" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by name, title, or email..."
+                className="w-full text-xs pl-7 pr-7 py-1.5 border border-ia-border rounded bg-white focus:outline-none focus:border-ia-teal"
+              />
+              {searchQuery && (
+                <button onClick={() => setSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-ia-muted hover:text-ia-navy" aria-label="Clear search">
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+            <div className="inline-flex items-center gap-1.5">
+              <ArrowUpDown size={12} className="text-ia-muted" />
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="text-xs px-2 py-1.5 border border-ia-border rounded bg-white focus:outline-none focus:border-ia-teal"
+              >
+                <option value="entity">Sort: Primary entity</option>
+                <option value="name_asc">Sort: Name (A–Z)</option>
+                <option value="hire_desc">Sort: Hire date (newest)</option>
+                <option value="hire_asc">Sort: Hire date (oldest)</option>
+                <option value="gross_desc">Sort: H1 2026 gross (high → low)</option>
+              </select>
+            </div>
+            {(searchQuery || activeEmployeeType || activeEntityFilter != null) && (
+              <span className="text-[11px] text-ia-muted">
+                {filteredEmployees.length} of {employees.length} shown
+              </span>
+            )}
           </div>
+
+          {/* Roster — grouped by entity when sortBy='entity', otherwise flat grid */}
+          {employeeGroups ? (
+            employeeGroups.length === 0 ? (
+              <EmptyState title="No matches" description="Try clearing filters or adjusting the search query." />
+            ) : (
+              <div className="space-y-4">
+                {employeeGroups.map((g) => (
+                  <div key={g.entity}>
+                    <div className="text-[10px] uppercase font-medium text-ia-muted mb-1.5 inline-flex items-center gap-1">
+                      <Building2 size={10} /> {g.entity}
+                      <span className="text-ia-muted/70">· {g.employees.length}</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {g.employees.map((emp) => renderEmployeeCard(emp))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          ) : filteredEmployees.length === 0 ? (
+            <EmptyState title="No matches" description="Try clearing filters or adjusting the search query." />
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {filteredEmployees.map((emp) => renderEmployeeCard(emp))}
+            </div>
+          )}
         </>
       )}
 
