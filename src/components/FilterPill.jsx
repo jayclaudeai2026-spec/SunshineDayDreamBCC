@@ -18,7 +18,7 @@ export default function FilterPill({ label, active = false, onClick, count }) {
       {count != null && (
         <span className={cn(
           'inline-flex items-center justify-center min-w-[1.25rem] h-4 px-1 rounded-full text-[10px] font-semibold',
-          active ? 'bg-white/20 text-white' : 'bg-white text-ia-muted'
+          active ? 'bg-ia-card/20 text-white' : 'bg-ia-card text-ia-muted'
         )}>{count}</span>
       )}
     </button>

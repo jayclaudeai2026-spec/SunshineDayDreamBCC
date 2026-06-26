@@ -1,6 +1,6 @@
 /** @type {import('tailwindcss').Config} */
-// IA palette: Navy #1A2744, Teal #0E7C7B, Light Teal #E0F0EF, Cream #F5F0EB, body #333333.
-// All modules pull colors via Tailwind utilities like bg-ia-navy, text-ia-teal, etc.
+// IA palette is now driven by CSS custom properties in src/index.css.
+// Flip <html data-theme="dark"> and every utility below restyles instantly.
 export default {
   content: [
     './index.html',
@@ -10,20 +10,31 @@ export default {
     extend: {
       colors: {
         ia: {
-          navy:       '#1A2744',
-          'navy-700': '#243454',
-          'navy-500': '#37466a',
-          teal:       '#0E7C7B',
-          'teal-700': '#0a5e5d',
-          'teal-light': '#E0F0EF',
-          cream:      '#F5F0EB',
-          'cream-dark': '#ECE5DA',
-          ink:        '#333333',
-          muted:      '#6b7280',
-          'border':   '#E5E1DA',
-          danger:     '#b91c1c',
-          warning:    '#b45309',
-          success:    '#0f766e',
+          page:         'var(--ia-page)',
+          card:         'var(--ia-card)',
+          'card-hover': 'var(--ia-card-hover)',
+          elevated:     'var(--ia-elevated)',
+
+          navy:         'var(--ia-navy)',
+          'navy-700':   'var(--ia-navy-700)',
+          'navy-500':   'var(--ia-navy-500)',
+          ink:          'var(--ia-ink)',
+          muted:        'var(--ia-muted)',
+
+          teal:         'var(--ia-teal)',
+          'teal-700':   'var(--ia-teal-700)',
+          'teal-light': 'var(--ia-teal-light)',
+          orange:       'var(--ia-orange)',
+          'orange-soft':'var(--ia-orange-soft)',
+
+          // back-compat aliases for existing code
+          cream:        'var(--ia-page)',
+          'cream-dark': 'var(--ia-elevated)',
+
+          border:       'var(--ia-border)',
+          danger:       'var(--ia-danger)',
+          warning:      'var(--ia-warning)',
+          success:      'var(--ia-success)',
         },
       },
       fontFamily: {
@@ -31,7 +42,8 @@ export default {
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
       },
       boxShadow: {
-        'ia-card': '0 1px 2px rgba(26, 39, 68, 0.06), 0 4px 12px rgba(26, 39, 68, 0.04)',
+        'ia-card':     'var(--ia-shadow-card)',
+        'ia-elevated': 'var(--ia-shadow-elevated)',
       },
     },
   },

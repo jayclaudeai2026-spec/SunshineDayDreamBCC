@@ -259,7 +259,7 @@ function EmployeeProfileEditor({ employee, onSaved }) {
     );
   }
 
-  const inputCls = 'w-full text-xs px-2 py-1 border border-ia-border rounded bg-white focus:outline-none focus:border-ia-teal';
+  const inputCls = 'w-full text-xs px-2 py-1 border border-ia-border rounded bg-ia-card text-ia-ink focus:outline-none focus:border-ia-teal';
   const labelCls = 'text-[10px] uppercase text-ia-muted font-medium mb-0.5';
 
   return (
@@ -853,7 +853,7 @@ export default function HRPeople() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search by name, title, or email..."
-                className="w-full text-xs pl-7 pr-7 py-1.5 border border-ia-border rounded bg-white focus:outline-none focus:border-ia-teal"
+                className="w-full text-xs pl-7 pr-7 py-1.5 border border-ia-border rounded bg-ia-card text-ia-ink focus:outline-none focus:border-ia-teal"
               />
               {searchQuery && (
                 <button onClick={() => setSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-ia-muted hover:text-ia-navy" aria-label="Clear search">
@@ -866,7 +866,7 @@ export default function HRPeople() {
               <select
                 value={sortBy}
                 onChange={(e) => setSortBy(e.target.value)}
-                className="text-xs px-2 py-1.5 border border-ia-border rounded bg-white focus:outline-none focus:border-ia-teal"
+                className="text-xs px-2 py-1.5 border border-ia-border rounded bg-ia-card text-ia-ink focus:outline-none focus:border-ia-teal"
               >
                 <option value="entity">Sort: Primary entity</option>
                 <option value="name_asc">Sort: Name (A–Z)</option>

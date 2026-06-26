@@ -20,7 +20,7 @@ export default function StatCard({
   }[tone] ?? 'border-ia-border';
 
   return (
-    <div className={cn('rounded-lg border bg-white shadow-ia-card p-4', toneClass)}>
+    <div className={cn('rounded-lg border bg-ia-card shadow-ia-card p-4', toneClass)}>
       <div className="flex items-start justify-between">
         <span className="text-xs font-medium text-ia-muted uppercase tracking-wide">{label}</span>
         {Icon && <Icon size={16} className="text-ia-muted" />}

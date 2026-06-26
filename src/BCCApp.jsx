@@ -7,12 +7,12 @@
 // - Top bar shows entity name and any urgent alerts pill
 // - <Outlet> via routes loads the active module
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, BarChart3, FileText, Brain, Workflow,
   Bell, Settings as SettingsIcon, ListChecks,
-  Megaphone, Users, Receipt, ShieldCheck,
+  Megaphone, Users, Receipt, ShieldCheck, Sun, Moon,
 } from 'lucide-react';
 
 import NavItem from './components/NavItem.jsx';
@@ -57,6 +57,52 @@ const NAV = [
   { key: 'team',        to: '/team',                      label: 'Team & Access', icon: ShieldCheck, ownerOnly: true },
 ];
 
+
+// ---------------------------------------------------------------------------
+// Theme toggle: light <-> dark via localStorage + <html data-theme> attribute.
+// Defaults to dark (set in index.html before React mounts to prevent FOUC).
+// ---------------------------------------------------------------------------
+
+function useTheme() {
+  const [theme, setThemeState] = useState(() => {
+    if (typeof document === 'undefined') return 'dark';
+    return document.documentElement.getAttribute('data-theme') || 'dark';
+  });
+
+  const setTheme = (next) => {
+    setThemeState(next);
+    document.documentElement.setAttribute('data-theme', next);
+    try {
+      localStorage.setItem('bcc-theme', next);
+    } catch (e) {
+      // localStorage may be unavailable in some embeddings -- silently no-op
+    }
+  };
+
+  useEffect(() => {
+    // Sync attribute on mount in case it drifted
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
+  return [theme, setTheme];
+}
+
+function ThemeToggle() {
+  const [theme, setTheme] = useTheme();
+  const isDark = theme === 'dark';
+  return (
+    <button
+      type="button"
+      onClick={() => setTheme(isDark ? 'light' : 'dark')}
+      className="ia-theme-toggle"
+      aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+      title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+    >
+      {isDark ? <Sun size={16} /> : <Moon size={16} />}
+    </button>
+  );
+}
+
 export default function BCCApp() {
   const { user, loading: authLoading } = useAuthUser();
   const { data: ctx } = useClientContext();
@@ -98,7 +144,7 @@ export default function BCCApp() {
   return (
     <div className="min-h-screen flex flex-col">
       <DemoBanner />
-      <header className="bg-white border-b border-ia-border">
+      <header className="bg-ia-card border-b border-ia-border">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-md bg-ia-navy flex items-center justify-center text-white font-bold text-xs">
@@ -116,6 +162,7 @@ export default function BCCApp() {
                 {alertCount} alert{alertCount === 1 ? '' : 's'}
               </a>
             )}
+            <ThemeToggle />
             {user?.email && (
               <span className="text-xs text-ia-muted hidden sm:inline">
                 {user.email}{isOwner ? ' · owner' : ''}
@@ -166,7 +213,7 @@ export default function BCCApp() {
         </main>
       </div>
 
-      <footer className="border-t border-ia-border bg-white">
+      <footer className="border-t border-ia-border bg-ia-card">
         <div className="max-w-7xl mx-auto px-4 py-3 text-xs text-ia-muted flex items-center justify-between">
           <span>BCC powered by Claude</span>
           <span>v1.0</span>

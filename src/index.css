@@ -2,24 +2,93 @@
 @tailwind components;
 @tailwind utilities;
 
-/* IA palette as CSS custom properties.
-   Tailwind utilities (bg-ia-navy, etc.) are the preferred way to apply
-   palette colors; these vars are here for cases where Tailwind doesn't
-   fit (e.g. inline styles, dynamic colors driven by data). */
+/* ==========================================================
+   IA palette as CSS custom properties.
+   Single source of truth - Tailwind utilities resolve through these.
+   Flip <html data-theme="dark"> to restyle the entire app.
+   ========================================================== */
 :root {
+  /* Surfaces - warm cream */
+  --ia-page: #FAF7F0;
+  --ia-card: #FFFFFF;
+  --ia-card-hover: #F5F1E8;
+  --ia-elevated: #ECE5DA;
+
+  /* Text */
   --ia-navy: #1A2744;
   --ia-navy-700: #243454;
+  --ia-navy-500: #37466a;
+  --ia-ink: #333333;
+  --ia-muted: #7A8B95;
+
+  /* Accents */
   --ia-teal: #0E7C7B;
   --ia-teal-700: #0a5e5d;
   --ia-teal-light: #E0F0EF;
-  --ia-cream: #F5F0EB;
-  --ia-cream-dark: #ECE5DA;
-  --ia-ink: #333333;
-  --ia-muted: #6b7280;
-  --ia-border: #E5E1DA;
+  --ia-orange: #C2410C;
+  --ia-orange-soft: #FED7AA;
+
+  /* Structure */
+  --ia-border: #E5E0D5;
+
+  /* Status */
   --ia-danger: #b91c1c;
   --ia-warning: #b45309;
   --ia-success: #0f766e;
+
+  /* Pill backgrounds and text (theme-aware) */
+  --ia-success-bg: #d1fae5;
+  --ia-success-text: #065f46;
+  --ia-warning-bg: #fef3c7;
+  --ia-warning-text: #92400e;
+  --ia-danger-bg: #fee2e2;
+  --ia-danger-text: #991b1b;
+
+  /* Shadows */
+  --ia-shadow-card: 0 1px 2px rgba(26, 39, 68, 0.06), 0 4px 12px rgba(26, 39, 68, 0.04);
+  --ia-shadow-elevated: 0 4px 16px rgba(26, 39, 68, 0.10);
+}
+
+:root[data-theme="dark"] {
+  /* Surfaces - warm jam-band sunset over deep slate */
+  --ia-page: #0F1419;
+  --ia-card: #1A2128;
+  --ia-card-hover: #232B33;
+  --ia-elevated: #232B33;
+
+  /* Text - warm bone replaces navy for headings */
+  --ia-navy: #E8E2D5;
+  --ia-navy-700: #F0E8D7;
+  --ia-navy-500: #D4CCB8;
+  --ia-ink: #C9C2B5;
+  --ia-muted: #8B9199;
+
+  /* Accents - brighter teal, sunset orange */
+  --ia-teal: #4FC4C4;
+  --ia-teal-700: #6BD4D4;
+  --ia-teal-light: #1F3A3A;
+  --ia-orange: #E8995C;
+  --ia-orange-soft: #3D2818;
+
+  /* Structure */
+  --ia-border: #2D3640;
+
+  /* Status - softened for dark eyes */
+  --ia-danger: #D67878;
+  --ia-warning: #E8B04F;
+  --ia-success: #7FB069;
+
+  /* Pill backgrounds and text */
+  --ia-success-bg: #1F3324;
+  --ia-success-text: #A5D389;
+  --ia-warning-bg: #3D2F15;
+  --ia-warning-text: #F0C260;
+  --ia-danger-bg: #3D1F1F;
+  --ia-danger-text: #E89595;
+
+  /* Shadows - deeper for dark */
+  --ia-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.30), 0 4px 12px rgba(0, 0, 0, 0.20);
+  --ia-shadow-elevated: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
 
 @layer base {
@@ -27,7 +96,8 @@
     height: 100%;
   }
   body {
-    @apply bg-ia-cream text-ia-ink font-sans antialiased;
+    @apply bg-ia-page text-ia-ink font-sans antialiased;
+    transition: background-color 0.3s ease, color 0.3s ease;
   }
   a {
     @apply text-ia-teal hover:text-ia-teal-700 underline-offset-2;
@@ -39,16 +109,23 @@
   h2 { @apply text-xl; }
   h3 { @apply text-lg; }
   code {
-    @apply font-mono text-sm bg-ia-cream-dark px-1 py-0.5 rounded;
+    @apply font-mono text-sm bg-ia-elevated px-1 py-0.5 rounded;
   }
 }
 
 @layer components {
   .ia-card {
-    @apply bg-white border border-ia-border rounded-lg shadow-ia-card p-5;
+    @apply bg-ia-card border border-ia-border rounded-lg shadow-ia-card p-5;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
   }
   .ia-card-tight {
-    @apply bg-white border border-ia-border rounded-lg shadow-ia-card p-3;
+    @apply bg-ia-card border border-ia-border rounded-lg shadow-ia-card p-3;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+  }
+  /* Hero currency - warm sunset orange for headline numbers only */
+  .ia-currency-hero {
+    color: var(--ia-orange);
+    font-weight: 600;
   }
   .ia-button {
     @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium
@@ -57,25 +134,41 @@
   }
   .ia-button-ghost {
     @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium
-           text-ia-navy hover:bg-ia-cream-dark transition-colors;
+           text-ia-navy hover:bg-ia-card-hover transition-colors;
   }
   .ia-button-danger {
     @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium
            bg-ia-danger text-white hover:opacity-90 transition-opacity;
   }
   .ia-input {
-    @apply w-full px-3 py-2 border border-ia-border rounded-md text-sm
+    @apply w-full px-3 py-2 border border-ia-border rounded-md text-sm bg-ia-card text-ia-ink
            focus:outline-none focus:ring-2 focus:ring-ia-teal focus:border-transparent
            placeholder-ia-muted;
   }
   .ia-pill {
     @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
   }
-  .ia-pill-success { @apply ia-pill bg-emerald-50 text-emerald-700; }
-  .ia-pill-warning { @apply ia-pill bg-amber-50 text-amber-700; }
-  .ia-pill-danger  { @apply ia-pill bg-red-50 text-red-700; }
-  .ia-pill-info    { @apply ia-pill bg-ia-teal-light text-ia-teal-700; }
-  .ia-pill-muted   { @apply ia-pill bg-ia-cream-dark text-ia-muted; }
+  .ia-pill-success {
+    @apply ia-pill;
+    background-color: var(--ia-success-bg);
+    color: var(--ia-success-text);
+  }
+  .ia-pill-warning {
+    @apply ia-pill;
+    background-color: var(--ia-warning-bg);
+    color: var(--ia-warning-text);
+  }
+  .ia-pill-danger {
+    @apply ia-pill;
+    background-color: var(--ia-danger-bg);
+    color: var(--ia-danger-text);
+  }
+  .ia-pill-info {
+    @apply ia-pill bg-ia-teal-light text-ia-teal-700;
+  }
+  .ia-pill-muted {
+    @apply ia-pill bg-ia-elevated text-ia-muted;
+  }
   .ia-table {
     @apply w-full text-sm;
   }
@@ -86,6 +179,11 @@
     @apply px-3 py-2 border-b border-ia-border;
   }
   .ia-table tbody tr:hover {
-    @apply bg-ia-cream;
+    @apply bg-ia-card-hover;
+  }
+  /* Theme toggle button */
+  .ia-theme-toggle {
+    @apply inline-flex items-center justify-center w-8 h-8 rounded-md
+           text-ia-muted hover:text-ia-navy hover:bg-ia-card-hover transition-all;
   }
 }
