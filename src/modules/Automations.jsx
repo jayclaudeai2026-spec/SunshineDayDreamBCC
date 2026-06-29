@@ -231,7 +231,7 @@ export default function Automations() {
               onClick={() => setSortBy(o.key)}
               className={cn(
                 'px-2 py-0.5 rounded-full',
-                sortBy === o.key ? 'bg-ia-navy text-white' : 'text-ia-muted hover:text-ia-navy'
+                sortBy === o.key ? 'bg-ia-teal text-white' : 'text-ia-muted hover:text-ia-navy'
               )}
             >
               {o.label}

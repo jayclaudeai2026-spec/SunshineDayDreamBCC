@@ -224,7 +224,7 @@ function MemberRow({ member, modules, onSaved, selfUserId }) {
                 value={displayName}
                 onChange={(e) => { setDisplayName(e.target.value); setStatus(null); }}
                 placeholder={member.email?.split('@')[0] ?? ''}
-                className="w-full px-2 py-1.5 border border-ia-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-ia-teal"
+                className="ia-input py-1.5"
               />
             </label>
             <label className="flex items-center gap-2 pt-5">
@@ -269,11 +269,7 @@ function MemberRow({ member, modules, onSaved, selfUserId }) {
         <button
           onClick={handleSave}
           disabled={saving}
-          className={cn(
-            'bg-ia-navy text-white text-sm font-medium px-3 py-1.5 rounded-md',
-            'hover:bg-ia-navy/90 transition disabled:opacity-50 disabled:cursor-not-allowed',
-            'flex items-center gap-1'
-          )}
+          className="ia-button"
         >
           {saving ? (
             <><RefreshCw size={14} className="animate-spin" /> Saving…</>

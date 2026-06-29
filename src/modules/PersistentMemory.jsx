@@ -704,7 +704,7 @@ function ContextTab({ clientCtx, refetch, setActionError }) {
               type="text"
               value={clientCtx.client_id ?? ''}
               disabled
-              className="w-full text-sm border border-ia-border rounded px-3 py-2 bg-ia-cream-dark text-ia-muted"
+              className="ia-input bg-ia-elevated text-ia-muted"
             />
           </Field>
           <TextField label="Display name" value={form.display_name}
@@ -803,7 +803,7 @@ function TextField({ label, value, onChange, type = 'text', step }) {
         value={value ?? ''}
         step={step}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full text-sm text-ia-navy border border-ia-border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-ia-teal/40 focus:border-ia-teal"
+        className="ia-input"
       />
     </Field>
   );

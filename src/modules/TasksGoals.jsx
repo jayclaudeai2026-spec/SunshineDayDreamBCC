@@ -447,7 +447,7 @@ function PrioritySection({ number, title, icon: Icon, tone, count, description, 
         <div className="flex items-start gap-3 min-w-0 flex-1">
           <span className={cn(
             'flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold',
-            'bg-ia-navy text-white'
+            'bg-ia-teal text-white'
           )}>{number}</span>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">

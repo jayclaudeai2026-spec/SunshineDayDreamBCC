@@ -153,7 +153,7 @@ export default function BCCApp() {
       <header className="bg-ia-card border-b border-ia-border">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-md bg-ia-navy flex items-center justify-center text-white font-bold text-xs">
+            <div className="w-8 h-8 rounded-md bg-[#1A2744] flex items-center justify-center text-white font-bold text-xs">
               SDD
             </div>
             <div>
@@ -278,7 +278,7 @@ function SignInGate() {
     <div className="min-h-screen flex items-center justify-center p-6 bg-ia-cream">
       <div className="ia-card max-w-md w-full">
         <div className="text-center">
-          <div className="w-12 h-12 rounded-md bg-ia-navy mx-auto flex items-center justify-center text-white font-bold mb-3">
+          <div className="w-12 h-12 rounded-md bg-[#1A2744] mx-auto flex items-center justify-center text-white font-bold mb-3">
             SDD
           </div>
           <h2 className="text-ia-navy">Sign in to your BCC</h2>
@@ -300,11 +300,7 @@ function SignInGate() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               disabled={submitting}
-              className={cn(
-                'w-full px-3 py-2 border border-ia-border rounded-md text-sm',
-                'focus:outline-none focus:ring-2 focus:ring-ia-teal',
-                'disabled:opacity-50',
-              )}
+              className="ia-input disabled:opacity-50"
               placeholder="you@example.com"
             />
           </div>
@@ -320,11 +316,7 @@ function SignInGate() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               disabled={submitting}
-              className={cn(
-                'w-full px-3 py-2 border border-ia-border rounded-md text-sm',
-                'focus:outline-none focus:ring-2 focus:ring-ia-teal',
-                'disabled:opacity-50',
-              )}
+              className="ia-input disabled:opacity-50"
             />
           </div>
 
