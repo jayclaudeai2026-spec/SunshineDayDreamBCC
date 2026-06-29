@@ -149,6 +149,7 @@ export default function Dashboard() {
       {/* ---------------------------------------------------------------- */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard
+          hero
           label={`Revenue · ${kpi?.latest_full_period ? fmtMonth(kpi.latest_full_period) : '—'}`}
           value={fmtCurrency(kpi?.latest_revenue, { abbreviate: true })}
           sublabel={
@@ -161,6 +162,7 @@ export default function Dashboard() {
           loading={kpiLoading}
         />
         <StatCard
+          hero
           label="Cash on hand"
           value={fmtCurrency(kpi?.total_cash, { abbreviate: true })}
           sublabel={`AR ${fmtCurrency(kpi?.total_ar, { abbreviate: true })} · AP ${fmtCurrency(kpi?.total_ap, { abbreviate: true })}`}
@@ -168,6 +170,7 @@ export default function Dashboard() {
           loading={kpiLoading}
         />
         <StatCard
+          hero
           label={`Net income · ${kpi?.latest_full_period ? fmtMonth(kpi.latest_full_period) : '—'}`}
           value={fmtCurrency(kpi?.latest_net_income, { abbreviate: true })}
           sublabel={
@@ -180,6 +183,7 @@ export default function Dashboard() {
           loading={kpiLoading}
         />
         <StatCard
+          hero
           label="Working capital"
           value={fmtCurrency(kpi?.total_working_capital, { abbreviate: true })}
           sublabel={`Inventory ${fmtCurrency(kpi?.total_inventory, { abbreviate: true })}`}

@@ -599,7 +599,7 @@ export default function TaxCenter() {
                 </div>
                 <div className="ia-card">
                   <div className="text-[10px] uppercase font-medium text-ia-muted">Est. federal liability</div>
-                  <div className="text-xl font-semibold text-ia-navy mt-1">{fmtCurrency(aggregatePosition.est_federal_tax_liability_projected)}</div>
+                  <div className="text-xl font-semibold ia-currency-hero mt-1">{fmtCurrency(aggregatePosition.est_federal_tax_liability_projected)}</div>
                   <div className="text-xs text-ia-muted mt-1">
                     {aggregatePosition.payments_made > 0
                       ? `${fmtCurrency(aggregatePosition.payments_made)} paid · gap ${fmtCurrency(aggregatePosition.gap)}`

@@ -395,7 +395,7 @@ function EmployeePayrollDetail({ employee, payroll }) {
               return (
                 <tr key={p.id} className="border-b border-ia-border/40 last:border-0">
                   <td className="py-1 pr-2 text-ia-navy text-xs">{p.entities?.entity_short_name ?? `#${p.entity_id}`}</td>
-                  <td className="py-1 px-1 text-right text-ia-navy">{fmtCurrency(p.gross_pay)}</td>
+                  <td className="py-1 px-1 text-right ia-currency-hero">{fmtCurrency(p.gross_pay)}</td>
                   <td className="py-1 px-1 text-right text-ia-muted">{fmtCurrency(p.federal_withholding)}</td>
                   <td className="py-1 px-1 text-right text-ia-muted">{fmtCurrency(p.state_withholding)}</td>
                   <td className="py-1 px-1 text-right text-ia-muted">{fmtCurrency(ficaMed)}</td>
@@ -407,7 +407,7 @@ function EmployeePayrollDetail({ employee, payroll }) {
             {empPayroll.length > 1 && (
               <tr className="border-t border-ia-border font-medium bg-ia-cream/40">
                 <td className="py-1 pr-2 text-ia-navy">Total</td>
-                <td className="py-1 px-1 text-right text-ia-navy">{fmtCurrency(totals.gross)}</td>
+                <td className="py-1 px-1 text-right ia-currency-hero">{fmtCurrency(totals.gross)}</td>
                 <td className="py-1 px-1 text-right text-ia-muted">{fmtCurrency(totals.fed)}</td>
                 <td className="py-1 px-1 text-right text-ia-muted">{fmtCurrency(totals.state)}</td>
                 <td className="py-1 px-1 text-right text-ia-muted">{fmtCurrency(totals.fica + totals.medicare)}</td>

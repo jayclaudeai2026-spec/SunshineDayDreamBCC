@@ -10,6 +10,7 @@ export default function StatCard({
   trendValue,       // string like "+12.4%" — already formatted
   icon: Icon,
   tone = 'neutral', // 'neutral' | 'positive' | 'warning' | 'danger'
+  hero = false,     // when true, value renders in sunset-orange .ia-currency-hero
   loading = false,
 }) {
   const toneClass = {
@@ -25,7 +26,7 @@ export default function StatCard({
         <span className="text-xs font-medium text-ia-muted uppercase tracking-wide">{label}</span>
         {Icon && <Icon size={16} className="text-ia-muted" />}
       </div>
-      <div className="mt-2 text-2xl font-semibold text-ia-navy">
+      <div className={cn('mt-2 text-2xl font-semibold', hero ? 'ia-currency-hero' : 'text-ia-navy')}>
         {loading ? <span className="text-ia-muted text-base">…</span> : (value ?? '—')}
       </div>
       {(sublabel || trendValue) && (
