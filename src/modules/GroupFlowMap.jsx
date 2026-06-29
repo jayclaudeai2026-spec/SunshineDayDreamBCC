@@ -5,6 +5,8 @@ import {
 } from 'lucide-react';
 
 import SectionHeader from '../components/SectionHeader.jsx';
+import PrintButton from '../components/PrintButton.jsx';
+import AskClaudeButton from '../components/AskClaudeButton.jsx';
 import LoadingState from '../components/LoadingState.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import FilterPill from '../components/FilterPill.jsx';
@@ -195,14 +197,33 @@ export default function GroupFlowMap() {
             no hunting through line items required.
           </p>
         </div>
-        <button
-          className="ia-button-ghost"
-          onClick={() => { flowsQ.refetch(); entitiesQ.refetch(); }}
-          aria-label="Refresh flow data"
-        >
-          <RefreshCw size={14} />
-          <span>Refresh</span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap justify-end ia-no-print">
+          <button
+            className="ia-button-ghost"
+            onClick={() => { flowsQ.refetch(); entitiesQ.refetch(); }}
+            aria-label="Refresh flow data"
+          >
+            <RefreshCw size={14} />
+            <span>Refresh</span>
+          </button>
+          <PrintButton title={`BCC Group Flow Map — ${yearFilter === 'all' ? 'all time' : yearFilter}`} />
+          <AskClaudeButton
+            moduleLabel="Group Flow Map"
+            subject={`Intercompany flows · ${yearFilter === 'all' ? 'all time' : yearFilter} · ${edges.length} edge(s)`}
+            context={{
+              year_filter: yearFilter,
+              edge_count: edges.length,
+              totals: totals,
+              top_edges: edges.slice(0, 10).map((e) => ({
+                from: e.from_entity_name,
+                to: e.to_entity_name,
+                amount: e.amount,
+                type: e.flow_type,
+              })),
+            }}
+            suggestedPrompt="What's the read on these intercompany flows? Any anomalies, transfer-pricing concerns, or arcs I should investigate?"
+          />
+        </div>
       </header>
 
       {/* Header strip */}

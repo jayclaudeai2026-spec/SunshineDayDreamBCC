@@ -11,6 +11,8 @@ import {
 
 import StatCard from '../components/StatCard.jsx';
 import SectionHeader from '../components/SectionHeader.jsx';
+import PrintButton from '../components/PrintButton.jsx';
+import AskClaudeButton from '../components/AskClaudeButton.jsx';
 import LoadingState from '../components/LoadingState.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import { supabase } from '../lib/supabase.js';
@@ -134,14 +136,33 @@ export default function Dashboard() {
               : 'Group performance and operational health'}
           </p>
         </div>
-        <button
-          className="ia-button-ghost"
-          onClick={refetchStatus}
-          aria-label="Refresh"
-        >
-          <RefreshCw size={14} />
-          <span>Refresh</span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap justify-end ia-no-print">
+          <button
+            className="ia-button-ghost"
+            onClick={refetchStatus}
+            aria-label="Refresh"
+          >
+            <RefreshCw size={14} />
+            <span>Refresh</span>
+          </button>
+          <PrintButton title="BCC Dashboard — executive snapshot" />
+          <AskClaudeButton
+            moduleLabel="Dashboard"
+            subject={kpi?.latest_full_period ? `Group performance through ${kpi.latest_full_period}` : 'Group performance snapshot'}
+            context={{
+              latest_full_period: kpi?.latest_full_period,
+              latest_revenue: kpi?.latest_revenue,
+              prev_revenue: kpi?.prev_revenue,
+              latest_net_income: kpi?.latest_net_income,
+              latest_net_margin_pct: kpi?.latest_net_margin_pct,
+              ttm_revenue: kpi?.ttm_revenue,
+              ttm_net_income: kpi?.ttm_net_income,
+              latest_entities_reporting: kpi?.latest_entities_reporting,
+              last_data_received_at: kpi?.last_data_received_at,
+            }}
+            suggestedPrompt="Walk me through where the group stands. What's trending well, what's worrying, what should I do this week?"
+          />
+        </div>
       </header>
 
       {/* ---------------------------------------------------------------- */}

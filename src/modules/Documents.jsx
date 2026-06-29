@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import { ExternalLink, FileText, Tag, Filter } from 'lucide-react';
 
 import SectionHeader from '../components/SectionHeader.jsx';
+import PrintButton from '../components/PrintButton.jsx';
+import AskClaudeButton from '../components/AskClaudeButton.jsx';
 import LoadingState from '../components/LoadingState.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import FilterPill from '../components/FilterPill.jsx';
@@ -81,12 +83,30 @@ export default function Documents() {
 
   return (
     <section className="space-y-6">
-      <header>
-        <h1>Documents</h1>
-        <p className="text-sm text-ia-muted mt-1">
-          Searchable index of every Drive document. Files live in Drive; this table indexes
-          them for fast lookup by name, description, tags, and full-text content.
-        </p>
+      <header className="flex items-end justify-between gap-4">
+        <div>
+          <h1>Documents</h1>
+          <p className="text-sm text-ia-muted mt-1">
+            Searchable index of every Drive document. Files live in Drive; this table indexes
+            them for fast lookup by name, description, tags, and full-text content.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap justify-end ia-no-print">
+          <PrintButton title="BCC Documents — search results" />
+          <AskClaudeButton
+            moduleLabel="Documents"
+            subject={`Document search · ${(filtered ?? []).length} of ${(allDocsForCounts ?? []).length} shown`}
+            context={{
+              search,
+              active_category: activeCategory,
+              active_entity: activeEntity,
+              total_indexed: (allDocsForCounts ?? []).length,
+              filtered_count: (filtered ?? []).length,
+              category_counts: categoryCounts,
+            }}
+            suggestedPrompt="Help me find what I'm looking for in here, or summarize what's been arriving lately by category."
+          />
+        </div>
       </header>
 
       <div className="ia-card">

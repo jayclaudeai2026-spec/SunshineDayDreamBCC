@@ -5,6 +5,8 @@ import {
 } from 'lucide-react';
 
 import SectionHeader from '../components/SectionHeader.jsx';
+import PrintButton from '../components/PrintButton.jsx';
+import AskClaudeButton from '../components/AskClaudeButton.jsx';
 import LoadingState from '../components/LoadingState.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import SearchInput from '../components/SearchInput.jsx';
@@ -156,11 +158,28 @@ export default function PersistentMemory() {
 
   return (
     <section className="space-y-6">
-      <header>
-        <h1>Memory</h1>
-        <p className="text-sm text-ia-muted mt-1">
-          Operational rules, session notes, and client context Claude carries across conversations.
-        </p>
+      <header className="flex items-end justify-between gap-4">
+        <div>
+          <h1>Memory</h1>
+          <p className="text-sm text-ia-muted mt-1">
+            Operational rules, session notes, and client context Claude carries across conversations.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap justify-end ia-no-print">
+          <PrintButton title="BCC Memory — Claude's persistent knowledge" />
+          <AskClaudeButton
+            moduleLabel="Memory"
+            subject={`Memory · ${activeTab} tab · ${(memories ?? []).length} total items`}
+            context={{
+              tab: activeTab,
+              total_count: (memories ?? []).length,
+              rules_count: (rules ?? []).length,
+              sessions_count: (sessions ?? []).length,
+              search,
+            }}
+            suggestedPrompt="What's in my memory right now that's outdated, contradictory, or worth promoting to a standing rule?"
+          />
+        </div>
       </header>
 
       <div className="flex border-b border-ia-border">

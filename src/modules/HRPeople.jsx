@@ -6,6 +6,8 @@ import {
 } from 'lucide-react';
 
 import SectionHeader from '../components/SectionHeader.jsx';
+import PrintButton from '../components/PrintButton.jsx';
+import AskClaudeButton from '../components/AskClaudeButton.jsx';
 import LoadingState from '../components/LoadingState.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import FilterPill from '../components/FilterPill.jsx';
@@ -760,10 +762,25 @@ export default function HRPeople() {
             last-4 only; full SSN stays in your payroll provider.
           </p>
         </div>
-        <button className="ia-button-ghost" onClick={refetchAll} aria-label="Refresh">
-          <RefreshCw size={14} />
-          <span>Refresh</span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap justify-end ia-no-print">
+          <button className="ia-button-ghost" onClick={refetchAll} aria-label="Refresh">
+            <RefreshCw size={14} />
+            <span>Refresh</span>
+          </button>
+          <PrintButton title="BCC HR — roster and payroll" />
+          <AskClaudeButton
+            moduleLabel="HR / People"
+            subject={`Roster of ${(employees ?? []).length} employee(s) — ${activeTab} tab`}
+            context={{
+              tab: activeTab,
+              employee_count: (employees ?? []).length,
+              active_entity_filter: activeEntityFilter,
+              payroll_records: (payroll ?? []).length,
+              assignment_records: (assignments ?? []).length,
+            }}
+            suggestedPrompt="Help me think through what's going on with the team. Anyone overloaded, underpaid, missing from a key entity, or due for a check-in?"
+          />
+        </div>
       </header>
 
       {/* By-entity payroll rollup */}

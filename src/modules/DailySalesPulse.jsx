@@ -9,6 +9,8 @@ import {
 
 import StatCard from '../components/StatCard.jsx';
 import SectionHeader from '../components/SectionHeader.jsx';
+import PrintButton from '../components/PrintButton.jsx';
+import AskClaudeButton from '../components/AskClaudeButton.jsx';
 import LoadingState from '../components/LoadingState.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import FilterPill from '../components/FilterPill.jsx';
@@ -208,6 +210,21 @@ export default function DailySalesPulse() {
                 onClick={() => setRangeKey(r.key)}
               />
             ))}
+            <PrintButton title="BCC Daily Sales Pulse" />
+            <AskClaudeButton
+              moduleLabel="Daily Sales Pulse"
+              subject={`Latest day ${latest?.date ?? ''} · ${rangeKey} window · ${rows.length} sales rows`}
+              context={{
+                range: rangeKey,
+                latest_date: latest?.date,
+                latest_location_count: latest?.locationCount,
+                latest_gross: latest?.gross,
+                latest_net: latest?.net,
+                latest_txns: latest?.txns,
+                total_rows_in_window: rows.length,
+              }}
+              suggestedPrompt="What's the read on sales right now? Anything trending up or down that I should pay attention to across the locations?"
+            />
             <button
               type="button"
               onClick={refetch}

@@ -6,6 +6,8 @@ import {
 } from 'lucide-react';
 
 import SectionHeader from '../components/SectionHeader.jsx';
+import PrintButton from '../components/PrintButton.jsx';
+import AskClaudeButton from '../components/AskClaudeButton.jsx';
 import LoadingState from '../components/LoadingState.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import { supabase } from '../lib/supabase.js';
@@ -134,10 +136,31 @@ export default function TasksGoals() {
             What needs your attention, pulled from across the BCC. Top of the list = most urgent.
           </p>
         </div>
-        <button className="ia-button-ghost" onClick={refetchAll} aria-label="Refresh">
-          <RefreshCw size={14} />
-          <span>Refresh</span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap justify-end ia-no-print">
+          <button className="ia-button-ghost" onClick={refetchAll} aria-label="Refresh">
+            <RefreshCw size={14} />
+            <span>Refresh</span>
+          </button>
+          <PrintButton title="BCC Tasks &amp; Goals — priority queue" />
+          <AskClaudeButton
+            moduleLabel="Tasks &amp; Goals"
+            subject={`Priority queue — ${totals.closes + totals.tax + totals.alerts + totals.review + totals.recipes + totals.docs} item(s) open`}
+            context={{
+              counts: {
+                overdue_closes: overdueCloses?.length ?? 0,
+                tax_due_14d: dueTax?.length ?? 0,
+                critical_alerts: criticalAlerts?.length ?? 0,
+                review_queue: reviewQueue?.length ?? 0,
+                unstable_recipes: trulyUnstable?.length ?? 0,
+                uncategorized_docs: uncategorizedDocs?.length ?? 0,
+              },
+              critical_alert_ids: (criticalAlerts ?? []).map((a) => a.id),
+              review_queue_ids: (reviewQueue ?? []).map((a) => a.id),
+              overdue_close_periods: (overdueCloses ?? []).map((c) => ({ entity: c.entity_short_name, period: c.period })),
+            }}
+            suggestedPrompt="What should I tackle first? Walk me through the priority order and what I need to make a decision on each item."
+          />
+        </div>
       </header>
 
       {totalLoading && grandTotal === 0 ? (
