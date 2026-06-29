@@ -12,7 +12,7 @@ import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, BarChart3, FileText, Brain, Workflow,
   Bell, Settings as SettingsIcon, ListChecks,
-  Megaphone, Users, Receipt, ShieldCheck, Sun, Moon, Network,
+  Megaphone, Users, Receipt, ShieldCheck, Sun, Moon, Network, Activity,
 } from 'lucide-react';
 
 import NavItem from './components/NavItem.jsx';
@@ -27,6 +27,7 @@ import { cn } from './lib/utils.js';
 
 // Module imports
 import Dashboard           from './modules/Dashboard.jsx';
+import DailySalesPulse     from './modules/DailySalesPulse.jsx';
 import Financials          from './modules/Financials.jsx';
 import Documents           from './modules/Documents.jsx';
 import PersistentMemory    from './modules/PersistentMemory.jsx';
@@ -45,6 +46,7 @@ import GroupFlowMap        from './modules/GroupFlowMap.jsx';
 // entry to only appear for owners regardless of grants (Team & Access).
 const NAV = [
   { key: 'dashboard',   to: '/',             end: true,  label: 'Dashboard',     icon: LayoutDashboard },
+  { key: 'daily_sales', to: '/daily-sales',              label: 'Daily Sales',   icon: Activity },
   { key: 'financials',  to: '/financials',                label: 'Financials',    icon: BarChart3 },
   { key: 'documents',   to: '/documents',                 label: 'Documents',     icon: FileText },
   { key: 'memory',      to: '/memory',                    label: 'Memory',        icon: Brain },
@@ -199,6 +201,7 @@ export default function BCCApp() {
         <main className="flex-1 min-w-0">
           <Routes>
             <Route path="/"             element={<GateRoute moduleKey="dashboard"   allowedSet={allowedSet}><Dashboard /></GateRoute>} />
+            <Route path="/daily-sales/*" element={<GateRoute moduleKey="daily_sales" allowedSet={allowedSet}><DailySalesPulse /></GateRoute>} />
             <Route path="/financials/*" element={<GateRoute moduleKey="financials"  allowedSet={allowedSet}><Financials /></GateRoute>} />
             <Route path="/documents/*"  element={<GateRoute moduleKey="documents"   allowedSet={allowedSet}><Documents /></GateRoute>} />
             <Route path="/memory/*"     element={<GateRoute moduleKey="memory"      allowedSet={allowedSet}><PersistentMemory /></GateRoute>} />

@@ -1,0 +1,502 @@
+import { useMemo, useState } from 'react';
+import {
+  TrendingUp, TrendingDown, DollarSign, ShoppingCart, Receipt,
+  Calendar, Award, AlertTriangle, RefreshCw, Activity,
+} from 'lucide-react';
+import {
+  ResponsiveContainer, LineChart, Line, Tooltip, XAxis, YAxis, CartesianGrid, Legend,
+} from 'recharts';
+
+import StatCard from '../components/StatCard.jsx';
+import SectionHeader from '../components/SectionHeader.jsx';
+import LoadingState from '../components/LoadingState.jsx';
+import EmptyState from '../components/EmptyState.jsx';
+import FilterPill from '../components/FilterPill.jsx';
+import { supabase } from '../lib/supabase.js';
+import { useSupabaseQuery } from '../lib/hooks.js';
+import { fmtCurrency, fmtDate, cn } from '../lib/utils.js';
+
+// Range options
+const RANGES = [
+  { key: '7',   days: 7,    label: 'Last 7 days' },
+  { key: '30',  days: 30,   label: 'Last 30 days' },
+  { key: '90',  days: 90,   label: 'Last 90 days' },
+  { key: 'all', days: null, label: 'All available' },
+];
+
+// Color palette for location lines (cycles if more locations)
+// Uses theme CSS vars so light/dark mode swap is automatic.
+const LINE_COLORS = [
+  'var(--ia-orange)',
+  'var(--ia-teal)',
+  'var(--ia-warning)',
+  'var(--ia-navy)',
+  'var(--ia-success, #10b981)',
+  'var(--ia-danger,  #ef4444)',
+  'var(--ia-ink)',
+];
+
+export default function DailySalesPulse() {
+  const [rangeKey, setRangeKey] = useState('30');
+  const range = RANGES.find((r) => r.key === rangeKey) ?? RANGES[1];
+
+  // Pull all daily_location_sales rows ordered desc; filter client-side.
+  // Volume is tiny — 90d full coverage is ~600 rows.
+  const { data: rowsRaw, loading, error, refetch } = useSupabaseQuery(
+    () => supabase
+      .from('daily_location_sales_view')
+      .select('*')
+      .order('sales_date', { ascending: false })
+      .limit(5000),
+    [],
+  );
+  const rows = rowsRaw ?? [];
+
+  // Latest date (already desc sorted)
+  const maxDate = rows[0]?.sales_date ?? null;
+
+  // Window cutoff
+  const cutoff = useMemo(() => {
+    if (!range.days || !maxDate) return null;
+    const d = new Date(`${maxDate}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - range.days + 1);
+    return d.toISOString().slice(0, 10);
+  }, [range.days, maxDate]);
+
+  const inWindow = useMemo(() => {
+    if (!cutoff) return rows;
+    return rows.filter((r) => r.sales_date >= cutoff);
+  }, [rows, cutoff]);
+
+  // Latest-day KPIs
+  const latest = useMemo(() => {
+    if (!maxDate) return null;
+    const dayRows = rows.filter((r) => r.sales_date === maxDate);
+    const sum = dayRows.reduce(
+      (acc, r) => ({
+        gross: acc.gross + Number(r.gross_sales || 0),
+        net:   acc.net   + Number(r.net_sales   || 0),
+        txn:   acc.txn   + Number(r.transaction_count || 0),
+        units: acc.units + Number(r.units_sold  || 0),
+      }),
+      { gross: 0, net: 0, txn: 0, units: 0 },
+    );
+    return {
+      ...sum,
+      avgTicket: sum.txn > 0 ? sum.net / sum.txn : 0,
+      date: maxDate,
+      locationCount: dayRows.length,
+    };
+  }, [rows, maxDate]);
+
+  // Per-location aggregates over selected window
+  const perLocation = useMemo(() => {
+    const m = new Map();
+    for (const r of inWindow) {
+      const key = r.heartland_id;
+      const cur = m.get(key) ?? {
+        heartland_id: r.heartland_id,
+        location_name: r.location_name,
+        entity_short_name: r.entity_short_name,
+        is_channel: r.is_channel,
+        gross: 0, net: 0, txn: 0, units: 0, days: 0,
+      };
+      cur.gross += Number(r.gross_sales || 0);
+      cur.net   += Number(r.net_sales   || 0);
+      cur.txn   += Number(r.transaction_count || 0);
+      cur.units += Number(r.units_sold  || 0);
+      cur.days  += 1;
+      m.set(key, cur);
+    }
+    return Array.from(m.values())
+      .map((v) => ({
+        ...v,
+        avgTicket:    v.txn  > 0 ? v.net / v.txn  : 0,
+        avgDailyNet:  v.days > 0 ? v.net / v.days : 0,
+      }))
+      .sort((a, b) => b.net - a.net);
+  }, [inWindow]);
+
+  // Aggregate over window
+  const aggregate = useMemo(() => {
+    const a = perLocation.reduce(
+      (acc, l) => ({
+        gross: acc.gross + l.gross,
+        net:   acc.net   + l.net,
+        txn:   acc.txn   + l.txn,
+        days:  Math.max(acc.days, l.days),
+      }),
+      { gross: 0, net: 0, txn: 0, days: 0 },
+    );
+    return {
+      ...a,
+      avgDailyNet: a.days > 0 ? a.net / a.days : 0,
+      avgTicket:   a.txn  > 0 ? a.net / a.txn  : 0,
+    };
+  }, [perLocation]);
+
+  // Per-day aggregates (for best/worst day + chart)
+  const dayAgg = useMemo(() => {
+    const m = new Map();
+    for (const r of inWindow) {
+      const cur = m.get(r.sales_date) ?? { date: r.sales_date, net: 0, txn: 0 };
+      cur.net += Number(r.net_sales || 0);
+      cur.txn += Number(r.transaction_count || 0);
+      m.set(r.sales_date, cur);
+    }
+    return Array.from(m.values()).sort((a, b) => a.date.localeCompare(b.date));
+  }, [inWindow]);
+
+  const bestDay = useMemo(() => {
+    if (dayAgg.length === 0) return null;
+    return [...dayAgg].sort((a, b) => b.net - a.net)[0];
+  }, [dayAgg]);
+  const worstDay = useMemo(() => {
+    if (dayAgg.length === 0) return null;
+    return [...dayAgg].sort((a, b) => a.net - b.net)[0];
+  }, [dayAgg]);
+
+  // Chart data: pivot to row-per-date, column-per-location
+  const chartData = useMemo(() => {
+    const dates = Array.from(new Set(inWindow.map((r) => r.sales_date))).sort();
+    const locKeys = perLocation.map((l) => l.heartland_id);
+    const byKey = new Map();
+    for (const r of inWindow) {
+      byKey.set(`${r.sales_date}|${r.heartland_id}`, Number(r.net_sales || 0));
+    }
+    return dates.map((d) => {
+      const row = { date: d };
+      for (const lk of locKeys) {
+        row[`loc_${lk}`] = byKey.get(`${d}|${lk}`) ?? 0;
+      }
+      return row;
+    });
+  }, [inWindow, perLocation]);
+
+  if (loading) return <LoadingState />;
+  if (error) {
+    return (
+      <EmptyState
+        icon={AlertTriangle}
+        title="Couldn't load daily sales"
+        message={String(error?.message || error)}
+      />
+    );
+  }
+  if (rows.length === 0) {
+    return (
+      <EmptyState
+        icon={Receipt}
+        title="No sales rows yet"
+        message="The first heartland-sales-pull cron run is scheduled for 08:00 UTC (3am Central). Once it runs, charts and per-location cards will appear here."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <SectionHeader
+        title="Daily Sales Pulse"
+        description={`Heartland Retail POS — latest day ${fmtDate(latest?.date)} across ${latest?.locationCount ?? 0} locations`}
+        actions={
+          <>
+            {RANGES.map((r) => (
+              <FilterPill
+                key={r.key}
+                label={r.label}
+                active={r.key === rangeKey}
+                onClick={() => setRangeKey(r.key)}
+              />
+            ))}
+            <button
+              type="button"
+              onClick={refetch}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-ia-cream-dark text-ia-navy hover:bg-ia-teal-light transition-colors"
+              title="Refetch from Supabase"
+            >
+              <RefreshCw size={12} />
+              <span>Refresh</span>
+            </button>
+          </>
+        }
+      />
+
+      {/* Latest-day KPIs — hero orange on money columns */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatCard
+          icon={DollarSign}
+          label="Latest day gross"
+          value={fmtCurrency(latest?.gross ?? 0)}
+          sublabel={fmtDate(latest?.date)}
+          hero
+        />
+        <StatCard
+          icon={DollarSign}
+          label="Latest day net"
+          value={fmtCurrency(latest?.net ?? 0)}
+          sublabel={`${(latest?.units ?? 0).toLocaleString()} units sold`}
+          hero
+        />
+        <StatCard
+          icon={ShoppingCart}
+          label="Latest day transactions"
+          value={(latest?.txn ?? 0).toLocaleString()}
+        />
+        <StatCard
+          icon={Receipt}
+          label="Latest day avg ticket"
+          value={fmtCurrency(latest?.avgTicket ?? 0)}
+        />
+      </div>
+
+      {/* Window-level summary */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatCard
+          icon={TrendingUp}
+          label={`Net — ${range.label.toLowerCase()}`}
+          value={fmtCurrency(aggregate.net)}
+          sublabel={`Across ${aggregate.txn.toLocaleString()} transactions`}
+          hero
+        />
+        <StatCard
+          icon={Activity}
+          label="Avg net per day"
+          value={fmtCurrency(aggregate.avgDailyNet)}
+          sublabel={`${aggregate.days} day${aggregate.days === 1 ? '' : 's'} of data`}
+        />
+        <StatCard
+          icon={Award}
+          label="Best day"
+          value={fmtCurrency(bestDay?.net ?? 0)}
+          sublabel={bestDay ? fmtDate(bestDay.date) : '—'}
+          tone="positive"
+        />
+        <StatCard
+          icon={TrendingDown}
+          label="Slowest day"
+          value={fmtCurrency(worstDay?.net ?? 0)}
+          sublabel={worstDay ? fmtDate(worstDay.date) : '—'}
+        />
+      </div>
+
+      {/* Daily-net by location chart */}
+      <div className="bg-ia-card border border-ia-border rounded-lg p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-medium text-ia-navy">Daily net sales by location</h3>
+          <span className="text-xs text-ia-muted">{chartData.length} days</span>
+        </div>
+        <div className="h-80">
+          {chartData.length === 0 ? (
+            <div className="h-full flex items-center justify-center text-sm text-ia-muted">
+              No data in this window
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--ia-border)" />
+                <XAxis
+                  dataKey="date"
+                  stroke="var(--ia-muted)"
+                  tick={{ fontSize: 11 }}
+                  tickFormatter={(d) => (d || '').slice(5)}
+                  minTickGap={20}
+                />
+                <YAxis
+                  stroke="var(--ia-muted)"
+                  tick={{ fontSize: 11 }}
+                  tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+                  width={50}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: 'var(--ia-card)',
+                    border: '1px solid var(--ia-border)',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    color: 'var(--ia-ink)',
+                  }}
+                  labelFormatter={(d) => fmtDate(d)}
+                  formatter={(v, name) => [fmtCurrency(v), name]}
+                />
+                <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
+                {perLocation.map((loc, i) => (
+                  <Line
+                    key={loc.heartland_id}
+                    type="monotone"
+                    dataKey={`loc_${loc.heartland_id}`}
+                    name={loc.location_name}
+                    stroke={LINE_COLORS[i % LINE_COLORS.length]}
+                    strokeWidth={2}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+
+      {/* Per-location cards */}
+      <div>
+        <SectionHeader
+          title="By location"
+          description={`Window: ${range.label.toLowerCase()}`}
+        />
+        {perLocation.length === 0 ? (
+          <EmptyState
+            icon={Receipt}
+            title="No data in this window"
+            message="Try widening the range filter."
+          />
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {perLocation.map((loc, i) => (
+              <LocationCard
+                key={loc.heartland_id}
+                loc={loc}
+                color={LINE_COLORS[i % LINE_COLORS.length]}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Recent days matrix */}
+      <RecentDaysMatrix inWindow={inWindow} perLocation={perLocation} />
+    </div>
+  );
+}
+
+function LocationCard({ loc, color }) {
+  return (
+    <div className="rounded-lg border border-ia-border bg-ia-card shadow-ia-card p-4">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span
+              className="inline-block w-2 h-2 rounded-full flex-shrink-0"
+              style={{ background: color }}
+              aria-hidden="true"
+            />
+            <h4 className="text-sm font-semibold text-ia-navy truncate">
+              {loc.location_name}
+            </h4>
+          </div>
+          {loc.entity_short_name && (
+            <div className="text-xs text-ia-muted mt-0.5 truncate">{loc.entity_short_name}</div>
+          )}
+          {loc.is_channel && (
+            <div className="text-xs font-medium mt-0.5" style={{ color: 'var(--ia-warning)' }}>
+              Online channel
+            </div>
+          )}
+        </div>
+        <div className="text-right flex-shrink-0">
+          <div className="ia-currency-hero text-lg leading-tight">{fmtCurrency(loc.net)}</div>
+          <div className="text-[10px] text-ia-muted uppercase tracking-wide">
+            net · {loc.days} day{loc.days === 1 ? '' : 's'}
+          </div>
+        </div>
+      </div>
+      <dl className="grid grid-cols-3 gap-x-3 gap-y-2 mt-4 text-xs">
+        <div>
+          <dt className="text-ia-muted">Gross</dt>
+          <dd className="font-medium text-ia-navy">{fmtCurrency(loc.gross)}</dd>
+        </div>
+        <div>
+          <dt className="text-ia-muted">Avg / day</dt>
+          <dd className="font-medium text-ia-navy">{fmtCurrency(loc.avgDailyNet)}</dd>
+        </div>
+        <div>
+          <dt className="text-ia-muted">Avg ticket</dt>
+          <dd className="font-medium text-ia-navy">{fmtCurrency(loc.avgTicket)}</dd>
+        </div>
+        <div>
+          <dt className="text-ia-muted">Txns</dt>
+          <dd className="font-medium text-ia-navy">{loc.txn.toLocaleString()}</dd>
+        </div>
+        <div>
+          <dt className="text-ia-muted">Units</dt>
+          <dd className="font-medium text-ia-navy">{loc.units.toLocaleString()}</dd>
+        </div>
+        <div>
+          <dt className="text-ia-muted">Active days</dt>
+          <dd className="font-medium text-ia-navy">{loc.days}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
+function RecentDaysMatrix({ inWindow, perLocation }) {
+  const allDates = useMemo(() => {
+    const ds = Array.from(new Set(inWindow.map((r) => r.sales_date))).sort().reverse();
+    return ds.slice(0, 14);
+  }, [inWindow]);
+
+  const cellMap = useMemo(() => {
+    const m = new Map();
+    const dateSet = new Set(allDates);
+    for (const r of inWindow) {
+      if (!dateSet.has(r.sales_date)) continue;
+      m.set(`${r.sales_date}|${r.heartland_id}`, Number(r.net_sales || 0));
+    }
+    return m;
+  }, [inWindow, allDates]);
+
+  if (allDates.length === 0 || perLocation.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-ia-border bg-ia-card p-4 overflow-x-auto">
+      <h3 className="text-sm font-medium text-ia-navy mb-3">
+        Recent days · net sales by location
+      </h3>
+      <table className="min-w-full text-xs">
+        <thead>
+          <tr className="border-b border-ia-border">
+            <th className="text-left py-2 px-2 font-medium text-ia-muted whitespace-nowrap">Date</th>
+            {perLocation.map((loc) => (
+              <th
+                key={loc.heartland_id}
+                className="text-right py-2 px-2 font-medium text-ia-navy whitespace-nowrap"
+              >
+                {loc.location_name}
+              </th>
+            ))}
+            <th className="text-right py-2 px-2 font-medium text-ia-navy whitespace-nowrap">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {allDates.map((d) => {
+            let dayTotal = 0;
+            const cells = perLocation.map((loc) => {
+              const v = cellMap.get(`${d}|${loc.heartland_id}`);
+              if (v != null) dayTotal += v;
+              return { id: loc.heartland_id, value: v };
+            });
+            return (
+              <tr key={d} className="border-b border-ia-border last:border-b-0">
+                <td className="py-1.5 px-2 text-ia-navy whitespace-nowrap">{fmtDate(d)}</td>
+                {cells.map((c) => (
+                  <td
+                    key={c.id}
+                    className={cn(
+                      'py-1.5 px-2 text-right tabular-nums',
+                      c.value == null ? 'text-ia-muted' : 'text-ia-navy',
+                    )}
+                  >
+                    {c.value == null ? '—' : fmtCurrency(c.value)}
+                  </td>
+                ))}
+                <td className="py-1.5 px-2 text-right tabular-nums font-medium text-ia-navy">
+                  {fmtCurrency(dayTotal)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
