@@ -351,7 +351,7 @@ export default function TaxCenter() {
             subject={`Tax center — ${activeTab} tab`}
             context={{
               tab: activeTab,
-              counts: tabCounts,
+              counts: counts,
               past_due_count: pastDue.length,
               past_due_estimated: totalOverdueEst,
               upcoming_count: upcoming.length,
