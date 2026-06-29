@@ -8,6 +8,8 @@ import StatCard from '../components/StatCard.jsx';
 import SectionHeader from '../components/SectionHeader.jsx';
 import LoadingState from '../components/LoadingState.jsx';
 import EmptyState from '../components/EmptyState.jsx';
+import PrintButton from '../components/PrintButton.jsx';
+import AskClaudeButton from '../components/AskClaudeButton.jsx';
 import { supabase } from '../lib/supabase.js';
 import { useEntities, useSupabaseQuery } from '../lib/hooks.js';
 import { fmtCurrency, fmtMonth, fmtPct, cn } from '../lib/utils.js';
@@ -126,7 +128,7 @@ export default function Financials() {
             P&amp;L, balance sheet snapshot, cash position, and trend across the last 12 months.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end ia-no-print">
           <select
             value={selectedEntityId}
             onChange={(e) => setSelectedEntityId(e.target.value)}
@@ -140,6 +142,30 @@ export default function Financials() {
           <button className="ia-button-ghost" onClick={refetchPl}>
             <RefreshCw size={14} /><span>Refresh</span>
           </button>
+          <PrintButton
+            title={`BCC Financials — ${selectedEntityId === 'group' ? 'Group' : (entities ?? []).find((e) => String(e.id) === String(selectedEntityId))?.entity_short_name ?? 'entity'}`}
+          />
+          <AskClaudeButton
+            moduleLabel="Financials"
+            subject={selectedEntityId === 'group'
+              ? 'Group financials, last 12 months'
+              : `Entity ${(entities ?? []).find((e) => String(e.id) === String(selectedEntityId))?.entity_short_name ?? selectedEntityId} financials, last 12 months`}
+            context={{
+              scope: selectedEntityId === 'group' ? 'group' : 'entity',
+              entity_id: entityFilter,
+              entity_name: selectedEntityId === 'group' ? null : (entities ?? []).find((e) => String(e.id) === String(selectedEntityId))?.entity_short_name,
+              latest_period: latest?.period,
+              latest_revenue: latestRevenue,
+              latest_ebitda: Number(latest?.ebitda ?? 0),
+              latest_net_income: Number(latest?.net_income ?? 0),
+              latest_gross_profit: Number(latest?.gross_profit ?? 0),
+              cash_total: aggCash,
+              ar_total: aggAr,
+              ap_total: aggAp,
+              monthly_pl_rows: (pl ?? []).slice(0, 12),
+            }}
+            suggestedPrompt={`Walk me through the trend here. What's going right, what's going wrong, and what would you do about it?`}
+          />
         </div>
       </header>
 

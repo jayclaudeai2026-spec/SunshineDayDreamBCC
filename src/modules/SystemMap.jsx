@@ -7,16 +7,19 @@
 import { useMemo, useState } from 'react';
 import {
   BookOpen, Search, Plus, Edit2, Save, X, ChevronLeft, CheckCircle2,
-  Clock, Link2, FileText, AlertTriangle, RefreshCw,
+  Clock, Link2, FileText, AlertTriangle, RefreshCw, History,
 } from 'lucide-react';
 
 import SectionHeader from '../components/SectionHeader.jsx';
 import LoadingState from '../components/LoadingState.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import FilterPill from '../components/FilterPill.jsx';
+import PrintButton from '../components/PrintButton.jsx';
+import AskClaudeButton from '../components/AskClaudeButton.jsx';
+import ConfirmDeleteButton from '../components/ConfirmDeleteButton.jsx';
 import { supabase } from '../lib/supabase.js';
 import { useSupabaseQuery } from '../lib/hooks.js';
-// (fmtDate / cn not currently used in this module)
+import { fmtDate } from '../lib/utils.js';
 
 const CATEGORIES = [
   { key: 'all',         label: 'All' },
@@ -289,6 +292,7 @@ function PageDetail({ slug, onBack, onEdit, onRefresh, allPagesBySlug }) {
   );
   const [bumping, setBumping] = useState(false);
   const [bumpError, setBumpError] = useState(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   if (loading) return <LoadingState label="Loading page…" />;
   if (error || !page) return <EmptyState title="Page not found" description={`No system_map row with slug "${slug}".`} />;
@@ -319,14 +323,36 @@ function PageDetail({ slug, onBack, onEdit, onRefresh, allPagesBySlug }) {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-3 ia-no-print">
         <button onClick={onBack} className="ia-button-ghost text-xs inline-flex items-center gap-1">
           <ChevronLeft size={14} /> Back to map
         </button>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           <button onClick={handleVerify} disabled={bumping} className="ia-button-ghost text-xs inline-flex items-center gap-1">
             <CheckCircle2 size={14} /> {bumping ? 'Marking…' : 'Verified now'}
           </button>
+          <button
+            onClick={() => setHistoryOpen(true)}
+            className="ia-button-ghost text-xs inline-flex items-center gap-1"
+            title="View past revisions of this page"
+          >
+            <History size={14} /> History
+          </button>
+          <PrintButton title={`BCC System Map — ${page.title}`} />
+          <AskClaudeButton
+            moduleLabel="System Map"
+            subject={`Wiki page: ${page.title} (${page.slug})`}
+            context={{
+              slug: page.slug,
+              title: page.title,
+              category: page.category,
+              last_verified_at: page.last_verified_at,
+              last_verified_by: page.last_verified_by,
+              related_slugs: page.related_slugs,
+              body_md: page.body_md,
+            }}
+            suggestedPrompt={`Help me work through what's on this BCC wiki page. What's outdated, missing, or worth updating?`}
+          />
           <button onClick={() => onEdit(page)} className="ia-button-ghost text-xs inline-flex items-center gap-1">
             <Edit2 size={14} /> Edit
           </button>
@@ -369,7 +395,7 @@ function PageDetail({ slug, onBack, onEdit, onRefresh, allPagesBySlug }) {
                 <button
                   key={r.slug}
                   onClick={() => onRefresh && onRefresh(r.slug)}
-                  className="text-xs px-2 py-1 rounded border border-ia-border bg-ia-page hover:border-ia-teal transition-colors text-ia-navy"
+                  className="text-xs px-2 py-1 rounded border border-ia-border bg-ia-page hover:border-ia-teal transition-colors text-ia-navy ia-no-print"
                   title={r.slug}
                 >
                   {r.category && <span className="text-ia-muted mr-1">[{r.category}]</span>}
@@ -380,11 +406,96 @@ function PageDetail({ slug, onBack, onEdit, onRefresh, allPagesBySlug }) {
           </div>
         )}
       </div>
+
+      {historyOpen && (
+        <RevisionHistoryModal slug={page.slug} onClose={() => setHistoryOpen(false)} />
+      )}
     </div>
   );
 }
 
-function PageEditor({ initial, onCancel, onSaved }) {
+// ---------------------------------------------------------------------------
+// Revision history: shows the snapshot rows from system_map_revisions, which
+// captures the pre-update state on every system_map UPDATE (trigger).
+// ---------------------------------------------------------------------------
+
+function RevisionHistoryModal({ slug, onClose }) {
+  const { data, loading, error } = useSupabaseQuery(
+    () => supabase
+      .from('system_map_revisions')
+      .select('id, slug, title, category, body_md, edited_by, edited_at, reason')
+      .eq('slug', slug)
+      .order('edited_at', { ascending: false })
+      .limit(50),
+    [slug],
+  );
+  const [openId, setOpenId] = useState(null);
+  const rows = data ?? [];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 ia-no-print">
+      <div className="ia-card max-w-3xl w-full max-h-[85vh] flex flex-col">
+        <div className="flex items-center justify-between mb-3 flex-shrink-0">
+          <h3 className="text-ia-navy inline-flex items-center gap-2">
+            <History size={16} /> Revision history — <code className="text-xs">{slug}</code>
+          </h3>
+          <button onClick={onClose} className="ia-button-ghost text-xs">
+            <X size={14} /> Close
+          </button>
+        </div>
+
+        <div className="text-xs text-ia-muted mb-3 flex-shrink-0">
+          Each row is the page state BEFORE that edit (captured on UPDATE by a Postgres trigger).
+          Most recent edit at top.
+        </div>
+
+        <div className="overflow-auto flex-1 min-h-0">
+          {loading && <LoadingState label="Loading revisions…" />}
+          {error && (
+            <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+              {error.message}
+            </div>
+          )}
+          {!loading && !error && rows.length === 0 && (
+            <EmptyState
+              title="No revisions yet"
+              description="This page hasn't been edited since it was created — there's nothing in the audit log."
+            />
+          )}
+          <ul className="space-y-2">
+            {rows.map((rev) => (
+              <li key={rev.id} className="border border-ia-border rounded-md">
+                <button
+                  type="button"
+                  onClick={() => setOpenId(openId === rev.id ? null : rev.id)}
+                  className="w-full text-left px-3 py-2 hover:bg-ia-card-hover transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium text-ia-navy">{rev.title || '(untitled)'}</span>
+                    <span className="text-[11px] text-ia-muted">{fmtDate(rev.edited_at, 'PPpp')}</span>
+                  </div>
+                  <div className="text-[11px] text-ia-muted mt-0.5">
+                    {rev.category} • edited by {rev.edited_by || 'unknown'}
+                    {rev.reason && <> • {rev.reason}</>}
+                  </div>
+                </button>
+                {openId === rev.id && (
+                  <div className="border-t border-ia-border px-3 py-2 bg-ia-page">
+                    <pre className="text-xs font-mono whitespace-pre-wrap text-ia-ink max-h-64 overflow-auto">
+                      {rev.body_md || '(empty body)'}
+                    </pre>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PageEditor({ initial, onCancel, onSaved, onDeleted }) {
   const isNew = !initial;
   const [slug, setSlug] = useState(initial?.slug ?? '');
   const [title, setTitle] = useState(initial?.title ?? '');
@@ -425,19 +536,45 @@ function PageEditor({ initial, onCancel, onSaved }) {
     }
   }
 
+  async function handleDelete() {
+    setSaving(true);
+    setError(null);
+    try {
+      const { error: delErr } = await supabase
+        .from('system_map')
+        .delete()
+        .eq('slug', initial.slug);
+      if (delErr) throw delErr;
+      onDeleted?.(initial.slug);
+    } catch (e) {
+      setError(e.message || String(e));
+      setSaving(false);
+    }
+  }
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <button onClick={onCancel} className="ia-button-ghost text-xs inline-flex items-center gap-1">
           <X size={14} /> Cancel
         </button>
-        <button
-          onClick={handleSave}
-          disabled={saving || !slug || !title}
-          className="ia-button"
-        >
-          <Save size={14} /> {saving ? 'Saving…' : (isNew ? 'Create page' : 'Save changes')}
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          {!isNew && (
+            <ConfirmDeleteButton
+              onConfirm={handleDelete}
+              label="Delete page"
+              confirmLabel="Click again to permanently delete"
+              disabled={saving}
+            />
+          )}
+          <button
+            onClick={handleSave}
+            disabled={saving || !slug || !title}
+            className="ia-button"
+          >
+            <Save size={14} /> {saving ? 'Saving…' : (isNew ? 'Create page' : 'Save changes')}
+          </button>
+        </div>
       </div>
 
       <div className="ia-card space-y-3">
@@ -604,6 +741,10 @@ export default function SystemMap() {
         onSaved={(slug) => {
           setRefreshKey((k) => k + 1);
           setView({ mode: 'detail', slug });
+        }}
+        onDeleted={() => {
+          setRefreshKey((k) => k + 1);
+          setView({ mode: 'list' });
         }}
       />
     );

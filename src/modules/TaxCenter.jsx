@@ -6,6 +6,8 @@ import {
 } from 'lucide-react';
 
 import SectionHeader from '../components/SectionHeader.jsx';
+import PrintButton from '../components/PrintButton.jsx';
+import AskClaudeButton from '../components/AskClaudeButton.jsx';
 import LoadingState from '../components/LoadingState.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import FilterPill from '../components/FilterPill.jsx';
@@ -338,10 +340,26 @@ export default function TaxCenter() {
             forecast position, and entity tax profiles. Filings happen with your CPA or portal.
           </p>
         </div>
-        <button className="ia-button-ghost" onClick={refetchAll} aria-label="Refresh">
-          <RefreshCw size={14} />
-          <span>Refresh</span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap justify-end ia-no-print">
+          <button className="ia-button-ghost" onClick={refetchAll} aria-label="Refresh">
+            <RefreshCw size={14} />
+            <span>Refresh</span>
+          </button>
+          <PrintButton title={`BCC Tax Center — ${activeTab}`} />
+          <AskClaudeButton
+            moduleLabel="Tax Center"
+            subject={`Tax center — ${activeTab} tab`}
+            context={{
+              tab: activeTab,
+              counts: tabCounts,
+              past_due_count: pastDue.length,
+              past_due_estimated: totalOverdueEst,
+              upcoming_count: upcoming.length,
+              filed_count: filed.length,
+            }}
+            suggestedPrompt={`Walk me through what's happening in the ${activeTab} view. Anything I should prioritize, route to my CPA, or worry about?`}
+          />
+        </div>
       </header>
 
       {/* Past-due banner */}

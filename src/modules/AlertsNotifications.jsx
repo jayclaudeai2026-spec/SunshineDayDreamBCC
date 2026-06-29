@@ -8,6 +8,8 @@ import SectionHeader from '../components/SectionHeader.jsx';
 import LoadingState from '../components/LoadingState.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import FilterPill from '../components/FilterPill.jsx';
+import AskClaudeButton from '../components/AskClaudeButton.jsx';
+import PrintButton from '../components/PrintButton.jsx';
 import { supabase } from '../lib/supabase.js';
 import { useSupabaseQuery, useAuthUser } from '../lib/hooks.js';
 import { fmtRelative, fmtDate, cn, truncate, severityPillClass } from '../lib/utils.js';
@@ -403,6 +405,28 @@ function AlertCard({
           <div className="text-xs text-ia-muted flex flex-wrap items-center gap-x-3 gap-y-1">
             <span>raised {fmtDate(alert.raised_at, 'PPpp')}</span>
             {alert.entity_id && <span>entity #{alert.entity_id}</span>}
+            <span>alert #{alert.id}</span>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-ia-border">
+            <AskClaudeButton
+              moduleLabel="Alerts"
+              subject={`Alert #${alert.id}: ${alert.category} (${alert.severity})`}
+              context={{
+                id: alert.id,
+                severity: alert.severity,
+                category: alert.category,
+                entity_id: alert.entity_id,
+                raised_at: alert.raised_at,
+                acknowledged_at: alert.acknowledged_at,
+                resolved_at: alert.resolved_at,
+                message: alert.message,
+                context: alert.context,
+                resolution_notes: alert.resolution_notes,
+              }}
+              suggestedPrompt={`Help me work through alert #${alert.id}. What does this mean, what should I do about it, and how do I close it out?`}
+            />
+            <PrintButton title={`BCC Alert #${alert.id} — ${alert.category}`} />
           </div>
         </div>
       )}

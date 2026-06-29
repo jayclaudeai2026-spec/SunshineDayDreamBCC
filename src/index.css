@@ -187,3 +187,106 @@
            text-ia-muted hover:text-ia-navy hover:bg-ia-card-hover transition-all;
   }
 }
+
+
+/* ==========================================================
+   Print styles. Triggered by window.print() (e.g. PrintButton).
+   Goal: paper-friendly snapshot of the focused content only.
+   - Hide app chrome via the .ia-no-print escape hatch
+   - Force light surfaces regardless of data-theme
+   - Remove shadows, expand min-height, kill page background fill
+   - Avoid breaking inside cards, tables, and figures
+   ========================================================== */
+@media print {
+  /* Force light surfaces so dark mode doesn't print pages of dark ink */
+  :root, :root[data-theme="dark"] {
+    --ia-page: #FFFFFF;
+    --ia-card: #FFFFFF;
+    --ia-card-hover: #FFFFFF;
+    --ia-elevated: #F5F5F5;
+    --ia-navy: #1A2744;
+    --ia-navy-700: #1A2744;
+    --ia-navy-500: #243454;
+    --ia-ink: #111111;
+    --ia-muted: #555555;
+    --ia-teal: #0E7C7B;
+    --ia-teal-700: #0a5e5d;
+    --ia-teal-light: #E0F0EF;
+    --ia-orange: #C2410C;
+    --ia-orange-soft: #FED7AA;
+    --ia-border: #BBBBBB;
+    --ia-danger: #b91c1c;
+    --ia-warning: #b45309;
+    --ia-success: #0f766e;
+    --ia-success-bg: #FFFFFF;
+    --ia-success-text: #065f46;
+    --ia-warning-bg: #FFFFFF;
+    --ia-warning-text: #92400e;
+    --ia-danger-bg: #FFFFFF;
+    --ia-danger-text: #991b1b;
+  }
+
+  /* Universal escape hatch: anything with this class is never printed */
+  .ia-no-print { display: none !important; }
+
+  body {
+    background: #FFFFFF !important;
+    color: #111111 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Hide app chrome: top header, sidebar, footer */
+  header, aside, footer { display: none !important; }
+
+  /* Let the main content claim the full page */
+  main, .min-h-screen, .max-w-7xl, .flex-1 {
+    max-width: 100% !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: block !important;
+  }
+
+  /* Cards become plain framed sections */
+  .ia-card, .ia-card-tight {
+    box-shadow: none !important;
+    border: 1px solid #CCCCCC !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+    padding: 12pt !important;
+    margin-bottom: 12pt !important;
+  }
+
+  /* Tables stay together when possible */
+  table { page-break-inside: auto; }
+  thead { display: table-header-group; }
+  tr { page-break-inside: avoid; }
+
+  /* Headings shouldn't sit alone at the bottom of a page */
+  h1, h2, h3, h4 {
+    page-break-after: avoid;
+    break-after: avoid;
+    color: #1A2744 !important;
+  }
+
+  /* Pretty links: print the URL alongside */
+  a[href^="http"]:after {
+    content: " (" attr(href) ")";
+    font-size: 9pt;
+    color: #555555;
+  }
+
+  /* Hide interactive UI noise that the .ia-no-print class might have missed */
+  button:not(.ia-keep-on-print),
+  input[type="search"],
+  .recharts-tooltip-wrapper {
+    display: none !important;
+  }
+
+  /* Page setup */
+  @page {
+    margin: 0.5in 0.6in;
+    size: letter;
+  }
+}
