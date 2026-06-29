@@ -18,8 +18,16 @@ const TABS = [
   { key: 'pastdue',  label: 'Past due' },
   { key: 'history',  label: 'Filed & paid' },
   { key: 'position', label: 'Position' },
+  { key: 'personal', label: 'Personal' },
   { key: 'profiles', label: 'Profiles' },
 ];
+
+const PERSONAL_STATUS_LABEL = {
+  awaiting_return: { pill: 'ia-pill-muted',    label: 'Awaiting return' },
+  received:        { pill: 'ia-pill-warning',  label: 'Received — data entry pending' },
+  filed:           { pill: 'ia-pill-success',  label: 'Filed' },
+  extension:       { pill: 'ia-pill-warning',  label: 'Extension filed' },
+};
 
 const FILER_TYPE_LABEL = {
   '1120':            'C-Corp (1120)',
@@ -177,14 +185,25 @@ export default function TaxCenter() {
     [],
   );
 
+  // Personal tab: Jay's personal 1040 filings (no entity_id)
+  const personalQ = useSupabaseQuery(
+    () => supabase
+      .from('personal_tax_filings_view')
+      .select('*')
+      .order('tax_year', { ascending: false })
+      .order('jurisdiction', { ascending: true }),
+    [],
+  );
+
   const upcoming = upcomingQ.data ?? [];
   const filed = calendarQ.data ?? [];
   const payments = paymentsQ.data ?? [];
   const profiles = profilesQ.data ?? [];
   const forecast = forecastQ.data ?? [];
   const taxDocs = taxDocsQ.data ?? [];
+  const personalFilings = personalQ.data ?? [];
 
-  const loading = upcomingQ.loading || calendarQ.loading || profilesQ.loading || forecastQ.loading;
+  const loading = upcomingQ.loading || calendarQ.loading || profilesQ.loading || forecastQ.loading || personalQ.loading;
 
   const refetchAll = () => {
     upcomingQ.refetch();
@@ -193,6 +212,7 @@ export default function TaxCenter() {
     profilesQ.refetch();
     forecastQ.refetch();
     taxDocsQ.refetch();
+    personalQ.refetch();
   };
 
   // Split upcoming into not-yet-due and past-due based on days_until_due
@@ -304,6 +324,7 @@ export default function TaxCenter() {
     pastdue:  pastDue.length,
     history:  filed.length,
     position: currentYearRows.length,
+    personal: personalFilings.length,
     profiles: profiles.length,
   };
 
@@ -359,7 +380,7 @@ export default function TaxCenter() {
       {loading && <LoadingState label="Loading tax data..." />}
 
       {/* Jurisdiction filter (not on Position or Profiles tabs) */}
-      {activeTab !== 'profiles' && activeTab !== 'position' && jurisdictions.length > 1 && (
+      {activeTab !== 'profiles' && activeTab !== 'position' && activeTab !== 'personal' && jurisdictions.length > 1 && (
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-medium text-ia-muted uppercase mr-1">Jurisdiction</span>
           <FilterPill label="All" active={!activeJurisdiction} onClick={() => setActiveJurisdiction(null)} count={jurisdictionCounts && Object.values(jurisdictionCounts).reduce((s, n) => s + n, 0)} />
@@ -758,6 +779,136 @@ export default function TaxCenter() {
             </div>
           </div>
         )
+      )}
+
+      {/* PERSONAL TAB — Phase A skeleton, financials populate as 1040 PDFs arrive */}
+      {activeTab === 'personal' && !loading && (
+        <div className="space-y-4">
+          {/* Routing instructions banner */}
+          <div className="ia-card bg-ia-card-hover/40 border-l-4 border-l-ia-teal">
+            <div className="flex items-start gap-3">
+              <User size={18} className="text-ia-teal mt-0.5 flex-shrink-0" />
+              <div className="text-sm">
+                <div className="font-medium text-ia-navy mb-1">Personal 1040 returns — Jay Trudeau</div>
+                <div className="text-ia-muted">
+                  Forward your <span className="text-ia-navy font-medium">2023, 2024, and 2025</span> personal
+                  federal 1040 returns to{' '}
+                  <span className="text-ia-teal font-mono text-xs">jayclaudeai2026@gmail.com</span> and these
+                  cards will populate. Until the returns arrive, owner-side projections in the Position tab
+                  use a 32% pass-through placeholder for federal liability. Once the 1040 figures are in,
+                  the projection switches to your real marginal bracket plus QBI Section 199A, MO state
+                  income tax, SE tax, and safe-harbor calculations.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {personalFilings.length === 0 ? (
+            <EmptyState
+              title="No personal filings tracked"
+              description="The personal_tax_filings table has no rows yet. Seed rows for the years you want to track."
+            />
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {personalFilings.map((f) => {
+                const meta = PERSONAL_STATUS_LABEL[f.status] ?? { pill: 'ia-pill-muted', label: f.status };
+                return (
+                  <div key={f.id} className="ia-card">
+                    <div className="flex items-start justify-between gap-2 mb-3">
+                      <div>
+                        <div className="text-2xl font-semibold text-ia-navy">TY {f.tax_year}</div>
+                        <div className="text-xs text-ia-muted uppercase tracking-wide mt-0.5">
+                          {f.filing_type} · {f.jurisdiction}
+                        </div>
+                      </div>
+                      <span className={cn('ia-pill text-[10px]', meta.pill)}>{meta.label}</span>
+                    </div>
+
+                    <div className="text-xs text-ia-muted mb-3">
+                      {f.filer_name ?? 'Jay Trudeau'}
+                      {f.filing_status && <span> · {f.filing_status.toUpperCase()}</span>}
+                    </div>
+
+                    {f.has_document ? (
+                      <a
+                        href={f.document_drive_url ?? '#'}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-ia-teal hover:underline mb-3"
+                      >
+                        <FileText size={11} />
+                        <span>{f.document_file_name ?? 'View return PDF'}</span>
+                        <ExternalLink size={10} />
+                      </a>
+                    ) : (
+                      <div className="text-xs text-ia-muted italic mb-3 px-2 py-1.5 bg-ia-card-hover/30 rounded">
+                        Awaiting 1040 PDF — forward to jayclaudeai2026@gmail.com
+                      </div>
+                    )}
+
+                    {f.has_financials ? (
+                      <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+                        <dt className="text-ia-muted">AGI</dt>
+                        <dd className="text-right text-ia-navy font-medium">{fmtCurrency(f.agi)}</dd>
+                        <dt className="text-ia-muted">Taxable income</dt>
+                        <dd className="text-right text-ia-navy font-medium">{fmtCurrency(f.taxable_income)}</dd>
+                        <dt className="text-ia-muted">Total tax</dt>
+                        <dd className="text-right ia-currency-hero">{fmtCurrency(f.total_tax)}</dd>
+                        <dt className="text-ia-muted">Total payments</dt>
+                        <dd className="text-right text-ia-navy">{fmtCurrency(f.total_payments)}</dd>
+                        {f.refund_or_owe != null && (
+                          <>
+                            <dt className="text-ia-muted">{Number(f.refund_or_owe) >= 0 ? 'Refund' : 'Owed'}</dt>
+                            <dd className={cn('text-right font-medium', Number(f.refund_or_owe) >= 0 ? 'text-emerald-700' : 'text-red-700')}>
+                              {fmtCurrency(Math.abs(Number(f.refund_or_owe)))}
+                            </dd>
+                          </>
+                        )}
+                        {f.marginal_bracket_pct != null && (
+                          <>
+                            <dt className="text-ia-muted pt-1 border-t border-ia-border/50 mt-1 col-span-2">
+                              <span className="block text-[10px] uppercase tracking-wide">Phase B inputs</span>
+                            </dt>
+                            <dt className="text-ia-muted">Marginal bracket</dt>
+                            <dd className="text-right text-ia-navy">{Number(f.marginal_bracket_pct).toFixed(1)}%</dd>
+                            {f.qbi_deduction != null && (
+                              <>
+                                <dt className="text-ia-muted">QBI (§199A)</dt>
+                                <dd className="text-right text-ia-navy">{fmtCurrency(f.qbi_deduction)}</dd>
+                              </>
+                            )}
+                            {f.se_tax != null && (
+                              <>
+                                <dt className="text-ia-muted">SE tax</dt>
+                                <dd className="text-right text-ia-navy">{fmtCurrency(f.se_tax)}</dd>
+                              </>
+                            )}
+                            {f.state_income_tax != null && (
+                              <>
+                                <dt className="text-ia-muted">State income tax</dt>
+                                <dd className="text-right text-ia-navy">{fmtCurrency(f.state_income_tax)}</dd>
+                              </>
+                            )}
+                          </>
+                        )}
+                      </dl>
+                    ) : (
+                      <div className="text-xs text-ia-muted italic">
+                        Financial figures will appear once the return PDF is processed and parsed.
+                      </div>
+                    )}
+
+                    {f.filed_date && (
+                      <div className="text-[10px] text-ia-muted mt-3 pt-2 border-t border-ia-border/50">
+                        Filed {fmtDate(f.filed_date)}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       )}
 
       {/* PROFILES TAB */}
