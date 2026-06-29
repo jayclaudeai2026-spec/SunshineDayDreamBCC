@@ -4,7 +4,7 @@
 // headings, bold, italic, inline code, fenced code blocks, bullet/numbered lists,
 // tables, blockquotes, links, and paragraphs.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   BookOpen, Search, Plus, Edit2, Save, X, ChevronLeft, CheckCircle2,
   Clock, Link2, FileText, AlertTriangle, RefreshCw,
@@ -16,7 +16,7 @@ import EmptyState from '../components/EmptyState.jsx';
 import FilterPill from '../components/FilterPill.jsx';
 import { supabase } from '../lib/supabase.js';
 import { useSupabaseQuery } from '../lib/hooks.js';
-import { fmtDate, cn } from '../lib/utils.js';
+// (fmtDate / cn not currently used in this module)
 
 const CATEGORIES = [
   { key: 'all',         label: 'All' },
@@ -434,11 +434,7 @@ function PageEditor({ initial, onCancel, onSaved }) {
         <button
           onClick={handleSave}
           disabled={saving || !slug || !title}
-          className={cn(
-            'text-xs px-3 py-1.5 rounded-md font-medium transition inline-flex items-center gap-1',
-            'bg-ia-navy text-white hover:bg-ia-navy/90',
-            'disabled:opacity-50 disabled:cursor-not-allowed',
-          )}
+          className="ia-button"
         >
           <Save size={14} /> {saving ? 'Saving…' : (isNew ? 'Create page' : 'Save changes')}
         </button>
@@ -653,7 +649,7 @@ export default function SystemMap() {
         />
         <button
           onClick={() => setView({ mode: 'new' })}
-          className="text-xs px-3 py-1.5 rounded-md font-medium bg-ia-navy text-white hover:bg-ia-navy/90 inline-flex items-center gap-1 flex-shrink-0"
+          className="ia-button flex-shrink-0"
         >
           <Plus size={14} /> New page
         </button>
