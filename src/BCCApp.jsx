@@ -340,11 +340,7 @@ function SignInGate() {
           <button
             type="submit"
             disabled={!canSubmit}
-            className={cn(
-              'w-full bg-ia-navy text-white text-sm font-medium py-2 rounded-md transition',
-              'hover:bg-ia-navy/90',
-              'disabled:opacity-50 disabled:cursor-not-allowed',
-            )}
+            className="ia-button w-full justify-center py-2"
           >
             {submitting ? 'Signing in…' : 'Sign in'}
           </button>
