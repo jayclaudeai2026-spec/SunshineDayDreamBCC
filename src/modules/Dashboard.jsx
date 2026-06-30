@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Activity, AlertTriangle, CheckCircle2, Clock, DollarSign, TrendingUp, TrendingDown,
-  Receipt, RefreshCw, Workflow, Wallet, ListChecks, Bell,
+  Receipt, RefreshCw, Workflow, Wallet, ListChecks, Bell, Sunrise, Package, MessageSquare,
 } from 'lucide-react';
 import {
   ResponsiveContainer, LineChart, Line, Tooltip, XAxis, YAxis, CartesianGrid,
@@ -33,6 +33,16 @@ export default function Dashboard() {
     [],
   );
   const kpi = kpiRow ?? null;
+
+  // Morning briefing context — single RPC call into get_daily_briefing_context().
+  // Same payload that drives the daily_briefing_email recipe, surfaced inline.
+  const { data: briefing, loading: briefingLoading, refetch: refetchBriefing } = useSupabaseQuery(
+    async () => {
+      const { data, error } = await supabase.rpc('get_daily_briefing_context');
+      return { data: data ?? null, error };
+    },
+    [],
+  );
 
   // 12-month trailing chart — only include months with >=8 entities reporting
   // so partial-coverage months don't drag the line to zero.
@@ -164,6 +174,15 @@ export default function Dashboard() {
           />
         </div>
       </header>
+
+      {/* ----------------------------------------------------------------- */}
+      {/* MORNING BRIEFING CARD — what to look at right now                   */}
+      {/* ----------------------------------------------------------------- */}
+      <MorningBriefingCard
+        briefing={briefing}
+        loading={briefingLoading}
+        onRefresh={refetchBriefing}
+      />
 
       {/* ---------------------------------------------------------------- */}
       {/* BUSINESS KPI STRIP                                                */}
@@ -540,5 +559,181 @@ export default function Dashboard() {
         )}
       </div>
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Morning briefing card — at-a-glance "what to look at right now" panel.
+// Driven by public.get_daily_briefing_context() RPC. Same payload feeds the
+// daily briefing email; here it's surfaced inline on the dashboard.
+// ---------------------------------------------------------------------------
+
+function MorningBriefingCard({ briefing, loading, onRefresh }) {
+  if (loading && !briefing) {
+    return (
+      <div className="ia-card">
+        <SectionHeader title="Morning briefing" description="Loading..." />
+        <LoadingState />
+      </div>
+    );
+  }
+
+  if (!briefing) return null;
+
+  const {
+    date,
+    day_of_week,
+    system_health,
+    ingest_24h = {},
+    parser_24h = {},
+    automation_24h = {},
+    ar_aging = {},
+    open_alerts = {},
+    heartland = {},
+    taxes_due_30d = [],
+    active_entities,
+  } = briefing;
+
+  const parserHasFailures = Number(parser_24h.failed ?? 0) > 0;
+  const automationHasFailures = Number(automation_24h.failed ?? 0) > 0;
+  const arHasOverdue = Number(ar_aging.overdue_60plus_total ?? 0) > 0;
+  const hasOpenAlerts = Number(open_alerts.total ?? 0) > 0;
+  const criticalAlerts = Number(open_alerts.critical ?? 0) + Number(open_alerts.error ?? 0);
+
+  const today = new Date();
+  const heartlandSalesDate = heartland.latest_sales_date ? new Date(heartland.latest_sales_date + 'T00:00:00') : null;
+  const heartlandDaysStale = heartlandSalesDate
+    ? Math.floor((today - heartlandSalesDate) / (1000 * 60 * 60 * 24))
+    : null;
+
+  // Distill top tax obligations to 3 (already date-ordered by RPC)
+  const topTaxes = (taxes_due_30d ?? []).slice(0, 3);
+
+  // What needs attention — short narrative summary
+  const attentionItems = [];
+  if (criticalAlerts > 0) attentionItems.push(`${criticalAlerts} critical/error alert${criticalAlerts === 1 ? '' : 's'} open`);
+  if (parserHasFailures) attentionItems.push(`${parser_24h.failed} parser failure${parser_24h.failed === 1 ? '' : 's'} in 24h`);
+  if (automationHasFailures) attentionItems.push(`${automation_24h.failed} automation failure${automation_24h.failed === 1 ? '' : 's'} in 24h`);
+  if (Number(ingest_24h.queue_pending ?? 0) > 5) attentionItems.push(`${ingest_24h.queue_pending} ingests pending parse`);
+  if (arHasOverdue) attentionItems.push(`${fmtCurrency(ar_aging.overdue_60plus_total, { abbreviate: true })} AR 60+ days overdue across ${ar_aging.entities_with_overdue} entit${ar_aging.entities_with_overdue === 1 ? 'y' : 'ies'}`);
+  if (heartlandDaysStale != null && heartlandDaysStale > 2) attentionItems.push(`Heartland sales last refreshed ${heartlandDaysStale}d ago`);
+
+  const allClear = attentionItems.length === 0;
+
+  return (
+    <div className="ia-card">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="flex items-start gap-3 min-w-0">
+          <div className="flex-shrink-0 w-10 h-10 rounded-full bg-ia-sunset/15 text-ia-sunset flex items-center justify-center">
+            <Sunrise size={20} />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-ia-navy">Morning briefing</h2>
+            <p className="text-xs text-ia-muted mt-0.5">
+              {day_of_week} {fmtDate(date, 'PPP')} · {active_entities ?? '—'} active entit{active_entities === 1 ? 'y' : 'ies'}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <span className={cn('ia-pill', healthPillClass(system_health))}>{system_health ?? 'unknown'}</span>
+          <button onClick={onRefresh} className="ia-button-ghost text-xs" title="Refresh briefing">
+            <RefreshCw size={12} />
+          </button>
+          <AskClaudeButton
+            moduleLabel="Morning briefing"
+            subject={`Morning briefing for ${day_of_week} ${date}`}
+            context={briefing}
+            suggestedPrompt="Walk me through this morning briefing. What needs my attention right now, and what should I do in the next hour?"
+          />
+        </div>
+      </div>
+
+      {/* Attention strip - what to look at right now */}
+      {allClear ? (
+        <div className="flex items-center gap-2 text-sm text-emerald-700 mb-3">
+          <CheckCircle2 size={16} />
+          <span>All clear — nothing requires attention this morning.</span>
+        </div>
+      ) : (
+        <div className="flex items-start gap-2 text-sm text-amber-800 mb-3">
+          <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
+          <span className="min-w-0">{attentionItems.join(' · ')}</span>
+        </div>
+      )}
+
+      {/* Compact 5-column signal grid */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+        <Link to="/alerts" className="rounded border border-ia-border p-2 hover:bg-ia-cream-dark/50 transition-colors">
+          <div className="flex items-center gap-1.5 text-ia-muted mb-1">
+            <Bell size={12} />
+            <span className="font-medium uppercase tracking-wide">Alerts</span>
+          </div>
+          <div className="font-semibold text-ia-navy text-base">{open_alerts.total ?? 0}</div>
+          <div className="text-[10px] text-ia-muted">
+            {hasOpenAlerts
+              ? [
+                  criticalAlerts > 0 && `${criticalAlerts} crit/err`,
+                  Number(open_alerts.warning) > 0 && `${open_alerts.warning} warn`,
+                  Number(open_alerts.info) > 0 && `${open_alerts.info} info`,
+                ].filter(Boolean).join(' · ')
+              : 'all clear'}
+          </div>
+        </Link>
+        <Link to="/documents" className="rounded border border-ia-border p-2 hover:bg-ia-cream-dark/50 transition-colors">
+          <div className="flex items-center gap-1.5 text-ia-muted mb-1">
+            <MessageSquare size={12} />
+            <span className="font-medium uppercase tracking-wide">Ingest 24h</span>
+          </div>
+          <div className="font-semibold text-ia-navy text-base">{ingest_24h.emails ?? 0}</div>
+          <div className="text-[10px] text-ia-muted">
+            {parser_24h.ok ?? 0} parsed
+            {parserHasFailures && <span className="text-red-700 font-medium"> · {parser_24h.failed} failed</span>}
+            {Number(ingest_24h.queue_pending) > 0 && <span> · {ingest_24h.queue_pending} queued</span>}
+          </div>
+        </Link>
+        <Link to="/automations" className="rounded border border-ia-border p-2 hover:bg-ia-cream-dark/50 transition-colors">
+          <div className="flex items-center gap-1.5 text-ia-muted mb-1">
+            <Workflow size={12} />
+            <span className="font-medium uppercase tracking-wide">Autos 24h</span>
+          </div>
+          <div className="font-semibold text-ia-navy text-base">{automation_24h.ok ?? 0}</div>
+          <div className="text-[10px] text-ia-muted">
+            {automationHasFailures
+              ? <span className="text-red-700 font-medium">{automation_24h.failed} failed</span>
+              : 'all ok'}
+          </div>
+        </Link>
+        <Link to="/daily-sales" className="rounded border border-ia-border p-2 hover:bg-ia-cream-dark/50 transition-colors">
+          <div className="flex items-center gap-1.5 text-ia-muted mb-1">
+            <Package size={12} />
+            <span className="font-medium uppercase tracking-wide">Heartland</span>
+          </div>
+          <div className="font-semibold text-ia-navy text-base">
+            {heartlandSalesDate ? fmtDate(heartland.latest_sales_date, 'MMM d') : '—'}
+          </div>
+          <div className="text-[10px] text-ia-muted">
+            {heartlandDaysStale != null
+              ? heartlandDaysStale === 0
+                ? 'today'
+                : heartlandDaysStale === 1
+                  ? 'yesterday'
+                  : `${heartlandDaysStale}d ago`
+              : 'no data'}
+          </div>
+        </Link>
+        <Link to="/tax" className="rounded border border-ia-border p-2 hover:bg-ia-cream-dark/50 transition-colors">
+          <div className="flex items-center gap-1.5 text-ia-muted mb-1">
+            <Receipt size={12} />
+            <span className="font-medium uppercase tracking-wide">Tax 30d</span>
+          </div>
+          <div className="font-semibold text-ia-navy text-base">{taxes_due_30d.length}</div>
+          <div className="text-[10px] text-ia-muted">
+            {topTaxes.length > 0
+              ? `next: ${topTaxes[0].filing_type} in ${topTaxes[0].days_until}d`
+              : 'nothing due'}
+          </div>
+        </Link>
+      </div>
+    </div>
   );
 }
