@@ -197,6 +197,16 @@ export default function TaxCenter() {
     [],
   );
 
+  // Personal tab: unlinked 1040 PDFs sitting in documents without a
+  // personal_tax_filings row pointing at them. Auto-populated by the
+  // BEFORE INSERT/UPDATE auto_tag_personal_1040 trigger on documents.
+  const candidatesQ = useSupabaseQuery(
+    () => supabase
+      .from('personal_tax_filing_candidates_view')
+      .select('*'),
+    [],
+  );
+
   const upcoming = upcomingQ.data ?? [];
   const filed = calendarQ.data ?? [];
   const payments = paymentsQ.data ?? [];
@@ -204,6 +214,7 @@ export default function TaxCenter() {
   const forecast = forecastQ.data ?? [];
   const taxDocs = taxDocsQ.data ?? [];
   const personalFilings = personalQ.data ?? [];
+  const personalCandidates = candidatesQ.data ?? [];
 
   const loading = upcomingQ.loading || calendarQ.loading || profilesQ.loading || forecastQ.loading || personalQ.loading;
 
@@ -807,24 +818,62 @@ export default function TaxCenter() {
             <div className="flex items-start gap-3">
               <User size={18} className="text-ia-teal mt-0.5 flex-shrink-0" />
               <div className="text-sm">
-                <div className="font-medium text-ia-navy mb-1">Personal 1040 returns — Jay Trudeau</div>
+                <div className="font-medium text-ia-navy mb-1">Personal 1040 returns — Jay & Mariann Trudeau</div>
                 <div className="text-ia-muted">
-                  Forward your <span className="text-ia-navy font-medium">2023, 2024, and 2025</span> personal
-                  federal 1040 returns to{' '}
-                  <span className="text-ia-teal font-mono text-xs">jayclaudeai2026@gmail.com</span> and these
-                  cards will populate. Until the returns arrive, owner-side projections in the Position tab
-                  use a 32% pass-through placeholder for federal liability. Once the 1040 figures are in,
-                  the projection switches to your real marginal bracket plus QBI Section 199A, MO state
-                  income tax, SE tax, and safe-harbor calculations.
+                  Forward 1040 PDFs to{' '}
+                  <span className="text-ia-teal font-mono text-xs">jayclaudeai2026@gmail.com</span> — the
+                  documents pipeline auto-tags any file matching <span className="font-mono text-xs">1040 + (personal|individual|trudeau)</span>
+                  with <span className="font-mono text-xs">is_personal=true</span> and surfaces unlinked PDFs below for one-click linking. Owner-side projections
+                  in the <span className="text-ia-navy font-medium">Position</span> tab no longer use the 32% placeholder — they
+                  pull a combined federal + state effective rate from the latest received 1040 (currently
+                  driven by the 2024 return, which captures QBI §199A, deductions, and state burden in one number).
+                  When the 2025 return arrives, projections will switch over automatically.
                 </div>
               </div>
             </div>
           </div>
 
+          {personalCandidates.length > 0 && (
+            <div className="ia-card border-l-4 border-l-amber-500">
+              <div className="flex items-start gap-3 mb-3">
+                <AlertCircle size={18} className="text-amber-600 mt-0.5 flex-shrink-0" />
+                <div className="min-w-0">
+                  <div className="font-medium text-ia-navy mb-1">
+                    {personalCandidates.length} 1040 PDF{personalCandidates.length === 1 ? '' : 's'} waiting to be linked
+                  </div>
+                  <div className="text-xs text-ia-muted">
+                    Detected as personal returns by the documents trigger, but no <span className="font-mono">personal_tax_filings</span> row
+                    yet points at them. Have Claude promote each into a filing row (sets <span className="font-mono">source_document_id</span>, parses AGI/total tax/etc).
+                  </div>
+                </div>
+              </div>
+              <ul className="divide-y divide-ia-border text-xs">
+                {personalCandidates.map((c) => (
+                  <li key={c.document_id} className="py-2 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-ia-navy font-medium truncate">
+                        {c.file_name}
+                      </div>
+                      <div className="text-ia-muted mt-0.5">
+                        {c.detected_tax_year ? `TY ${c.detected_tax_year}` : 'year unknown'} · doc id {c.document_id} · {fmtRelative(c.created_at)}
+                      </div>
+                    </div>
+                    {c.drive_url && (
+                      <a href={c.drive_url} target="_blank" rel="noreferrer"
+                         className="flex-shrink-0 inline-flex items-center gap-1 text-ia-teal hover:underline">
+                        <FileText size={11} /><span>open PDF</span><ExternalLink size={10} />
+                      </a>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {personalFilings.length === 0 ? (
             <EmptyState
               title="No personal filings tracked"
-              description="The personal_tax_filings table has no rows yet. Seed rows for the years you want to track."
+              description="The personal_tax_filings table has no rows yet. Forward a 1040 PDF to the intake address or insert a placeholder row directly."
             />
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
