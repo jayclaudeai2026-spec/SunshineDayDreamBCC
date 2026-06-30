@@ -64,6 +64,8 @@ export default function AlertsNotifications() {
   const [expandedId, setExpandedId] = useState(null);
   const [resolvingId, setResolvingId] = useState(null);
   const [resolutionNotes, setResolutionNotes] = useState('');
+  const [bulkResolveOpen, setBulkResolveOpen] = useState(false);
+  const [bulkResolveNotes, setBulkResolveNotes] = useState('');
   const [busy, setBusy] = useState(false);
 
   const { user } = useAuthUser();
@@ -164,12 +166,33 @@ export default function AlertsNotifications() {
       })
       .slice(0, 5);
 
+    // Resolution velocity: median + mean hours-to-resolve across alerts resolved in
+    // the trailing 30 days. Useful signal for how quickly the queue is getting worked.
+    const thirtyDaysAgo = now - 30 * 24 * 3_600_000;
+    const recentResolved = (tabbed.resolved ?? [])
+      .filter((a) => a.resolved_at && new Date(a.resolved_at).getTime() >= thirtyDaysAgo)
+      .map((a) => (new Date(a.resolved_at).getTime() - new Date(a.raised_at).getTime()) / 3_600_000)
+      .filter((h) => Number.isFinite(h) && h >= 0);
+    let medianResolutionHours = null;
+    let meanResolutionHours = null;
+    if (recentResolved.length > 0) {
+      const sorted = [...recentResolved].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      medianResolutionHours = sorted.length % 2 === 0
+        ? (sorted[mid - 1] + sorted[mid]) / 2
+        : sorted[mid];
+      meanResolutionHours = sorted.reduce((s, x) => s + x, 0) / sorted.length;
+    }
+
     return {
       openCount: open.length,
       criticalCount,
       warningCount,
       oldest,
       resolvedLast7d,
+      medianResolutionHours,
+      meanResolutionHours,
+      recentResolvedCount: recentResolved.length,
       heatmapRows,
       cellMax,
       oldestFive,
@@ -228,6 +251,39 @@ export default function AlertsNotifications() {
       await refetch();
     } catch (err) {
       console.error('bulk ack failed', err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function bulkResolve() {
+    const targets = filteredRows.filter((a) => !a.resolved_at);
+    if (targets.length === 0) return;
+    const sharedNote = bulkResolveNotes.trim() || null;
+    setBusy(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const ids = targets.map((a) => a.id);
+      const unackIds = targets.filter((a) => !a.acknowledged_at).map((a) => a.id);
+      if (unackIds.length > 0) {
+        await supabase
+          .from('system_alerts')
+          .update({ acknowledged_at: nowIso, acknowledged_by: actor })
+          .in('id', unackIds);
+      }
+      await supabase
+        .from('system_alerts')
+        .update({
+          resolved_at: nowIso,
+          resolved_by: actor,
+          ...(sharedNote ? { resolution_notes: sharedNote } : {}),
+        })
+        .in('id', ids);
+      setBulkResolveOpen(false);
+      setBulkResolveNotes('');
+      await refetch();
+    } catch (err) {
+      console.error('bulk resolve failed', err);
     } finally {
       setBusy(false);
     }
@@ -327,16 +383,66 @@ export default function AlertsNotifications() {
             </div>
           )}
 
-          {activeSeverity && activeTab === 'unresolved' && filteredRows.filter((a) => !a.acknowledged_at).length > 0 && (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={bulkAcknowledge}
-                disabled={busy}
-                className="ia-button-ghost text-xs"
-              >
-                <CheckCheck size={14} />
-                <span>Acknowledge all {filteredRows.filter((a) => !a.acknowledged_at).length} unacknowledged in this filter</span>
-              </button>
+          {activeTab === 'unresolved' && filteredRows.length > 0 && (activeSeverity || activeCategory) && (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {filteredRows.filter((a) => !a.acknowledged_at).length > 0 && (
+                  <button
+                    onClick={bulkAcknowledge}
+                    disabled={busy}
+                    className="ia-button-ghost text-xs"
+                  >
+                    <CheckCircle2 size={14} />
+                    <span>Acknowledge {filteredRows.filter((a) => !a.acknowledged_at).length} unack'd in filter</span>
+                  </button>
+                )}
+                <button
+                  onClick={() => setBulkResolveOpen((v) => !v)}
+                  disabled={busy}
+                  className="ia-button-ghost text-xs"
+                  title="Resolve every alert matching the current filter"
+                >
+                  <CheckCheck size={14} />
+                  <span>{bulkResolveOpen ? 'Cancel bulk resolve' : `Resolve ${filteredRows.length} in filter`}</span>
+                </button>
+                {bulkResolveOpen && (
+                  <span className="text-[11px] text-ia-muted">
+                    These will close together. Add an optional shared note ↓
+                  </span>
+                )}
+              </div>
+              {bulkResolveOpen && (
+                <div className="rounded-lg border border-ia-border bg-ia-card p-3 space-y-2">
+                  <textarea
+                    value={bulkResolveNotes}
+                    onChange={(e) => setBulkResolveNotes(e.target.value)}
+                    placeholder={`Shared resolution note for these ${filteredRows.length} alert${filteredRows.length === 1 ? '' : 's'} (optional). If left blank, no resolution_notes will be written.`}
+                    rows={2}
+                    className="w-full text-sm rounded border border-ia-border bg-ia-page px-2 py-1 text-ia-ink focus:outline-none focus:border-ia-teal"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        if (confirm(`Resolve ${filteredRows.length} alert${filteredRows.length === 1 ? '' : 's'} in this filter?`)) {
+                          bulkResolve();
+                        }
+                      }}
+                      disabled={busy}
+                      className="ia-button-primary text-xs"
+                    >
+                      <CheckCheck size={14} />
+                      <span>Confirm resolve {filteredRows.length}</span>
+                    </button>
+                    <button
+                      onClick={() => { setBulkResolveOpen(false); setBulkResolveNotes(''); }}
+                      disabled={busy}
+                      className="ia-button-ghost text-xs"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -391,7 +497,15 @@ export default function AlertsNotifications() {
 // ---------------------------------------------------------------------------
 
 function TriageBoard({ triage, activeCategory, onPickCategory, onClearCategory, onAck, onResolveStart, busy }) {
-  const { openCount, criticalCount, warningCount, oldest, resolvedLast7d, heatmapRows, cellMax, oldestFive } = triage;
+  const { openCount, criticalCount, warningCount, oldest, resolvedLast7d,
+          medianResolutionHours, recentResolvedCount,
+          heatmapRows, cellMax, oldestFive } = triage;
+
+  const velocitySublabel = (() => {
+    if (medianResolutionHours == null) return 'closed in the last week';
+    const label = formatAgeShort(medianResolutionHours);
+    return `median ${label} to close (${recentResolvedCount} closed · 30d)`;
+  })();
 
   return (
     <div className="space-y-4">
@@ -414,7 +528,7 @@ function TriageBoard({ triage, activeCategory, onPickCategory, onClearCategory, 
         <StatCard
           label="Resolved 7d"
           value={resolvedLast7d}
-          sublabel="closed in the last week"
+          sublabel={velocitySublabel}
           icon={CheckCheck}
           tone="positive"
         />
