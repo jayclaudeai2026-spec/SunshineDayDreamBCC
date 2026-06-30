@@ -1,13 +1,14 @@
 import { useMemo, useState } from 'react';
 import {
   Bell, BellOff, CheckCircle2, AlertTriangle, AlertCircle, Info,
-  ChevronDown, ChevronRight, RefreshCw, CheckCheck,
+  ChevronDown, ChevronRight, RefreshCw, CheckCheck, Clock, ListChecks,
 } from 'lucide-react';
 
 import SectionHeader from '../components/SectionHeader.jsx';
 import LoadingState from '../components/LoadingState.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import FilterPill from '../components/FilterPill.jsx';
+import StatCard from '../components/StatCard.jsx';
 import AskClaudeButton from '../components/AskClaudeButton.jsx';
 import PrintButton from '../components/PrintButton.jsx';
 import { supabase } from '../lib/supabase.js';
@@ -22,6 +23,21 @@ const TABS = [
 
 const SEVERITY_ORDER = ['critical', 'error', 'warning', 'info'];
 
+// Age buckets used by the Triage heatmap and the oldest-open list.
+const AGE_BUCKETS = [
+  { key: 'fresh',  label: '<24h',  maxHours:   24 },
+  { key: 'week',   label: '1-7d',  maxHours:  168 },
+  { key: 'month',  label: '7-30d', maxHours:  720 },
+  { key: 'stale',  label: '>30d',  maxHours: Infinity },
+];
+
+function bucketForAgeHours(hours) {
+  for (const b of AGE_BUCKETS) {
+    if (hours < b.maxHours) return b.key;
+  }
+  return 'stale';
+}
+
 function severityIcon(severity) {
   switch (severity) {
     case 'critical': return AlertCircle;
@@ -30,6 +46,15 @@ function severityIcon(severity) {
     case 'info':     return Info;
     default:          return Bell;
   }
+}
+
+function formatAgeShort(hours) {
+  if (hours < 1) return '<1h';
+  if (hours < 24) return `${Math.round(hours)}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d`;
+  const months = Math.floor(days / 30);
+  return `${months}mo`;
 }
 
 export default function AlertsNotifications() {
@@ -53,7 +78,7 @@ export default function AlertsNotifications() {
     [],
   );
 
-  // Counts
+  // Tab buckets
   const tabbed = useMemo(() => {
     const xs = alerts ?? [];
     return {
@@ -63,7 +88,6 @@ export default function AlertsNotifications() {
     };
   }, [alerts]);
 
-  // Category pills derived from current tab
   const currentTabRows = tabbed[activeTab] ?? [];
 
   const severityCounts = useMemo(() => {
@@ -86,7 +110,6 @@ export default function AlertsNotifications() {
     let xs = currentTabRows;
     if (activeSeverity) xs = xs.filter((a) => a.severity === activeSeverity);
     if (activeCategory) xs = xs.filter((a) => a.category === activeCategory);
-    // Stable sort: severity rank then raised_at desc
     return [...xs].sort((a, b) => {
       const aRank = SEVERITY_ORDER.indexOf(a.severity);
       const bRank = SEVERITY_ORDER.indexOf(b.severity);
@@ -94,6 +117,64 @@ export default function AlertsNotifications() {
       return (b.raised_at ?? '').localeCompare(a.raised_at ?? '');
     });
   }, [currentTabRows, activeSeverity, activeCategory]);
+
+  // -----------------------------------------------------------------------
+  // Triage block (unresolved tab only) — stat strip + heatmap + oldest list
+  // -----------------------------------------------------------------------
+
+  const triage = useMemo(() => {
+    const open = tabbed.unresolved ?? [];
+    const now = Date.now();
+    const ageHours = (a) => (now - new Date(a.raised_at).getTime()) / 3_600_000;
+    const enriched = open.map((a) => ({ ...a, _ageHours: ageHours(a), _bucket: bucketForAgeHours(ageHours(a)) }));
+
+    const criticalCount = enriched.filter((a) => a.severity === 'critical' || a.severity === 'error').length;
+    const warningCount  = enriched.filter((a) => a.severity === 'warning').length;
+    const oldest        = enriched.reduce((acc, a) => (acc == null || a._ageHours > acc._ageHours ? a : acc), null);
+
+    // Resolved in trailing 7 days
+    const oneWeekAgo = now - 7 * 24 * 3_600_000;
+    const resolvedLast7d = (tabbed.resolved ?? []).filter((a) => a.resolved_at && new Date(a.resolved_at).getTime() >= oneWeekAgo).length;
+
+    // Category × age heatmap, only for categories present in open set
+    const matrix = {};
+    const categories = new Set();
+    enriched.forEach((a) => {
+      categories.add(a.category);
+      matrix[a.category] = matrix[a.category] ?? {};
+      matrix[a.category][a._bucket] = (matrix[a.category][a._bucket] ?? 0) + 1;
+    });
+    const heatmapRows = [...categories]
+      .map((cat) => ({
+        category: cat,
+        total: enriched.filter((a) => a.category === cat).length,
+        cells: AGE_BUCKETS.map((b) => matrix[cat]?.[b.key] ?? 0),
+      }))
+      .sort((a, b) => b.total - a.total);
+
+    // Cell maximum across the matrix (for shading intensity)
+    let cellMax = 0;
+    heatmapRows.forEach((r) => r.cells.forEach((c) => { if (c > cellMax) cellMax = c; }));
+
+    // Top 5 oldest open, with severity-rank tiebreak (critical before info)
+    const oldestFive = [...enriched]
+      .sort((a, b) => {
+        if (Math.abs(a._ageHours - b._ageHours) > 1) return b._ageHours - a._ageHours;
+        return SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity);
+      })
+      .slice(0, 5);
+
+    return {
+      openCount: open.length,
+      criticalCount,
+      warningCount,
+      oldest,
+      resolvedLast7d,
+      heatmapRows,
+      cellMax,
+      oldestFive,
+    };
+  }, [tabbed.unresolved, tabbed.resolved]);
 
   async function acknowledge(alert) {
     setBusy(true);
@@ -119,7 +200,6 @@ export default function AlertsNotifications() {
           resolved_at: new Date().toISOString(),
           resolved_by: actor,
           resolution_notes: resolutionNotes.trim() || null,
-          // Acknowledge if not already
           ...(alert.acknowledged_at ? {} : { acknowledged_at: new Date().toISOString(), acknowledged_by: actor }),
         })
         .eq('id', alert.id);
@@ -205,6 +285,21 @@ export default function AlertsNotifications() {
         ))}
       </div>
 
+      {/* ----------------------------------------------------------------- */}
+      {/* Triage dashboard — only on Unresolved tab, only when we have data   */}
+      {/* ----------------------------------------------------------------- */}
+      {activeTab === 'unresolved' && triage.openCount > 0 && (
+        <TriageBoard
+          triage={triage}
+          activeCategory={activeCategory}
+          onPickCategory={(cat) => setActiveCategory(cat)}
+          onClearCategory={() => setActiveCategory(null)}
+          onAck={acknowledge}
+          onResolveStart={(a) => { setResolvingId(a.id); setResolutionNotes(''); setExpandedId(a.id); }}
+          busy={busy}
+        />
+      )}
+
       {/* Filter pills */}
       {currentTabRows.length > 0 && (
         <div className="space-y-3">
@@ -232,7 +327,6 @@ export default function AlertsNotifications() {
             </div>
           )}
 
-          {/* Bulk action available when a severity filter is active */}
           {activeSeverity && activeTab === 'unresolved' && filteredRows.filter((a) => !a.acknowledged_at).length > 0 && (
             <div className="flex items-center gap-2">
               <button
@@ -293,7 +387,140 @@ export default function AlertsNotifications() {
 }
 
 // ---------------------------------------------------------------------------
-// Alert card
+// Triage board: stat strip + heatmap + oldest-open quick list
+// ---------------------------------------------------------------------------
+
+function TriageBoard({ triage, activeCategory, onPickCategory, onClearCategory, onAck, onResolveStart, busy }) {
+  const { openCount, criticalCount, warningCount, oldest, resolvedLast7d, heatmapRows, cellMax, oldestFive } = triage;
+
+  return (
+    <div className="space-y-4">
+      {/* Stat strip */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <StatCard
+          label="Open"
+          value={openCount}
+          sublabel={`${warningCount} warning · ${criticalCount} critical/error`}
+          icon={Bell}
+          tone={criticalCount > 0 ? 'danger' : warningCount > 0 ? 'warning' : 'neutral'}
+        />
+        <StatCard
+          label="Oldest open"
+          value={oldest ? formatAgeShort(oldest._ageHours) : '—'}
+          sublabel={oldest ? `#${oldest.id} · ${oldest.category}` : 'nothing pending'}
+          icon={Clock}
+          tone={oldest && oldest._ageHours > 24 * 14 ? 'warning' : 'neutral'}
+        />
+        <StatCard
+          label="Resolved 7d"
+          value={resolvedLast7d}
+          sublabel="closed in the last week"
+          icon={CheckCheck}
+          tone="positive"
+        />
+        <StatCard
+          label="Categories open"
+          value={heatmapRows.length}
+          sublabel={heatmapRows.length > 0 ? `top: ${heatmapRows[0].category}` : '—'}
+          icon={ListChecks}
+          tone="neutral"
+        />
+      </div>
+
+      {/* Heatmap: category × age bucket */}
+      <div className="rounded-lg border border-ia-border bg-ia-card shadow-ia-card overflow-x-auto">
+        <div className="flex items-center justify-between px-4 pt-3 pb-2">
+          <h3 className="text-sm font-semibold text-ia-navy">Triage matrix</h3>
+          <span className="text-[11px] text-ia-muted">Click a category cell to filter the list below.</span>
+        </div>
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-ia-muted">
+              <th className="text-left font-medium px-4 py-2 w-1/3">Category</th>
+              {AGE_BUCKETS.map((b) => (
+                <th key={b.key} className="text-right font-medium px-3 py-2">{b.label}</th>
+              ))}
+              <th className="text-right font-medium px-4 py-2">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {heatmapRows.map((row) => {
+              const isActive = activeCategory === row.category;
+              return (
+                <tr key={row.category}
+                    className={cn(
+                      'border-t border-ia-border cursor-pointer transition-colors',
+                      isActive ? 'bg-ia-teal/10' : 'hover:bg-ia-cream-dark/50',
+                    )}
+                    onClick={() => isActive ? onClearCategory() : onPickCategory(row.category)}>
+                  <td className="px-4 py-2 font-medium text-ia-navy">{row.category}</td>
+                  {row.cells.map((n, i) => {
+                    const intensity = cellMax > 0 ? n / cellMax : 0;
+                    // Visual cue only — uses inline opacity to avoid arbitrary Tailwind classes.
+                    return (
+                      <td key={i} className="text-right px-3 py-2 font-mono">
+                        {n > 0 ? (
+                          <span
+                            className="inline-block min-w-[1.5rem] px-1.5 py-0.5 rounded text-ia-navy font-semibold"
+                            style={{ backgroundColor: `rgba(232,153,92,${0.15 + intensity * 0.55})` }}
+                          >
+                            {n}
+                          </span>
+                        ) : (
+                          <span className="text-ia-muted">·</span>
+                        )}
+                      </td>
+                    );
+                  })}
+                  <td className="text-right px-4 py-2 font-semibold text-ia-navy">{row.total}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Oldest 5 open */}
+      {oldestFive.length > 0 && (
+        <div className="rounded-lg border border-ia-border bg-ia-card shadow-ia-card">
+          <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-ia-border">
+            <h3 className="text-sm font-semibold text-ia-navy">5 oldest open · needs eyes</h3>
+            <span className="text-[11px] text-ia-muted">Sorted by age, then severity</span>
+          </div>
+          <ul className="divide-y divide-ia-border">
+            {oldestFive.map((a) => {
+              const Icon = severityIcon(a.severity);
+              return (
+                <li key={a.id} className="px-4 py-2 flex items-center gap-3 text-sm">
+                  <span className={cn(severityPillClass(a.severity), 'inline-flex items-center gap-1 flex-shrink-0')}>
+                    <Icon size={10} />
+                    {a.severity}
+                  </span>
+                  <span className="ia-pill-muted flex-shrink-0">{a.category}</span>
+                  <span className="text-ia-navy min-w-0 flex-1 truncate">#{a.id} · {truncate(a.message, 120)}</span>
+                  <span className="text-xs text-ia-muted flex-shrink-0">{formatAgeShort(a._ageHours)}</span>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {!a.acknowledged_at && (
+                      <button onClick={() => onAck(a)} disabled={busy} className="ia-button-ghost text-xs" title="Acknowledge">
+                        <CheckCircle2 size={12} />
+                      </button>
+                    )}
+                    <button onClick={() => onResolveStart(a)} disabled={busy} className="ia-button-ghost text-xs" title="Resolve">
+                      <CheckCheck size={12} />
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Alert card (unchanged)
 // ---------------------------------------------------------------------------
 
 function AlertCard({
@@ -362,7 +589,6 @@ function AlertCard({
         )}
       </div>
 
-      {/* Resolution input */}
       {resolving && (
         <div className="mt-3 pt-3 border-t border-ia-border space-y-2">
           <label className="text-xs font-medium text-ia-muted uppercase">Resolution notes (optional)</label>
@@ -383,7 +609,6 @@ function AlertCard({
         </div>
       )}
 
-      {/* Expanded body */}
       {expanded && !resolving && (
         <div className="mt-3 pt-3 border-t border-ia-border space-y-3">
           {alert.context && Object.keys(alert.context).length > 0 && (
