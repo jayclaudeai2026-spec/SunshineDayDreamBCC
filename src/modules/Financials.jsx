@@ -172,6 +172,7 @@ export default function Financials() {
       {/* Stat strip */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard
+          hero
           label="Revenue (latest month)"
           value={latest ? fmtCurrency(latestRevenue, { abbreviate: true }) : '—'}
           sublabel={latest ? fmtMonth(latest.period) : 'no data'}
@@ -180,18 +181,21 @@ export default function Financials() {
           icon={TrendingUp}
         />
         <StatCard
+          hero
           label="Cash on hand"
           value={cashPos?.length ? fmtCurrency(aggCash, { abbreviate: true }) : '—'}
           sublabel={cashPos?.length ? `as of ${fmtMonth(cashPos[0]?.as_of_date)}` : 'no BS data'}
           icon={Building2}
         />
         <StatCard
+          hero
           label="Accounts receivable"
           value={cashPos?.length ? fmtCurrency(aggAr, { abbreviate: true }) : '—'}
           sublabel="outstanding"
           icon={BarChart3}
         />
         <StatCard
+          hero
           label="Accounts payable"
           value={cashPos?.length ? fmtCurrency(aggAp, { abbreviate: true }) : '—'}
           sublabel="outstanding"
