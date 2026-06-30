@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Activity, AlertTriangle, CheckCircle2, Clock, DollarSign, TrendingUp, TrendingDown,
-  Receipt, RefreshCw, Workflow, Wallet, ListChecks, Bell, Sunrise, Package, MessageSquare,
+  Receipt, RefreshCw, Workflow, Wallet, ListChecks, Bell, Sunrise, Package, MessageSquare, BarChart3,
 } from 'lucide-react';
 import {
   ResponsiveContainer, LineChart, Line, Tooltip, XAxis, YAxis, CartesianGrid,
@@ -41,6 +41,12 @@ export default function Dashboard() {
       const { data, error } = await supabase.rpc('get_daily_briefing_context');
       return { data: data ?? null, error };
     },
+    [],
+  );
+
+  // Sales pulse — single-row aggregate from dashboard_sales_pulse_view.
+  const { data: pulse, loading: pulseLoading, refetch: refetchPulse } = useSupabaseQuery(
+    () => supabase.from('dashboard_sales_pulse_view').select('*').maybeSingle(),
     [],
   );
 
@@ -182,6 +188,15 @@ export default function Dashboard() {
         briefing={briefing}
         loading={briefingLoading}
         onRefresh={refetchBriefing}
+      />
+
+      {/* ----------------------------------------------------------------- */}
+      {/* SALES PULSE CARD — trailing 14d + same-day-last-week comparison    */}
+      {/* ----------------------------------------------------------------- */}
+      <SalesPulseCard
+        pulse={pulse}
+        loading={pulseLoading}
+        onRefresh={refetchPulse}
       />
 
       {/* ---------------------------------------------------------------- */}
@@ -734,6 +749,176 @@ function MorningBriefingCard({ briefing, loading, onRefresh }) {
           </div>
         </Link>
       </div>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Sales pulse card — compact daily-sales surface for the Dashboard.
+// Backed by public.dashboard_sales_pulse_view (migration 055).
+// Single hero number with sparkline + same-day-last-week comparison.
+// ---------------------------------------------------------------------------
+
+function SalesPulseCard({ pulse, loading, onRefresh }) {
+  if (loading && !pulse) {
+    return (
+      <div className="ia-card">
+        <SectionHeader title="Sales pulse" description="Loading..." />
+        <LoadingState />
+      </div>
+    );
+  }
+
+  if (!pulse || !pulse.latest_sales_date) {
+    return (
+      <div className="ia-card">
+        <div className="flex items-center gap-3">
+          <BarChart3 size={18} className="text-ia-muted" />
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-ia-navy">Sales pulse</h2>
+            <p className="text-xs text-ia-muted mt-0.5">No Heartland data yet — check edge function heartland-sales-pull.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const {
+    latest_sales_date,
+    latest_net_sales,
+    latest_txn_count,
+    prev_sdw_net_sales,
+    prev_sdw_txn_count,
+    t7_net_sales,
+    t7_txn_count,
+    sparkline = [],
+    anomalies = [],
+  } = pulse;
+
+  const latestNum = Number(latest_net_sales ?? 0);
+  const prevNum = Number(prev_sdw_net_sales ?? 0);
+  const t7Num = Number(t7_net_sales ?? 0);
+  const t7Txn = Number(t7_txn_count ?? 0);
+  const latestTxn = Number(latest_txn_count ?? 0);
+
+  const sdwDelta = prevNum > 0 ? (latestNum - prevNum) / prevNum : null;
+  const sdwTrend = sdwDelta == null ? 'flat' : sdwDelta > 0.005 ? 'up' : sdwDelta < -0.005 ? 'down' : 'flat';
+
+  const avgTxnValue = latestTxn > 0 ? latestNum / latestTxn : null;
+  const t7AvgDaily = t7Num / 7;
+
+  // Sparkline geometry — 14 days, width 220 height 38, padded
+  const W = 220, H = 38, PADX = 4, PADY = 4;
+  const points = Array.isArray(sparkline) ? sparkline : [];
+  let pathD = '';
+  let lastX = 0, lastY = 0;
+  if (points.length >= 2) {
+    const vals = points.map((p) => Number(p.v ?? 0));
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    const range = max - min || 1;
+    const stepX = (W - 2 * PADX) / (points.length - 1);
+    pathD = points
+      .map((p, i) => {
+        const x = PADX + i * stepX;
+        const y = H - PADY - ((Number(p.v ?? 0) - min) / range) * (H - 2 * PADY);
+        if (i === points.length - 1) { lastX = x; lastY = y; }
+        return `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
+      })
+      .join(' ');
+  }
+
+  return (
+    <div className="ia-card">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="flex items-start gap-3 min-w-0">
+          <div className="flex-shrink-0 w-10 h-10 rounded-full bg-ia-teal/15 text-ia-teal flex items-center justify-center">
+            <BarChart3 size={20} />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-ia-navy">Sales pulse</h2>
+            <p className="text-xs text-ia-muted mt-0.5">
+              Latest day {fmtDate(latest_sales_date, 'PPP')} · all locations + channels
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <button onClick={onRefresh} className="ia-button-ghost text-xs" title="Refresh">
+            <RefreshCw size={12} />
+          </button>
+          <Link to="/daily-sales" className="text-xs text-ia-teal hover:underline whitespace-nowrap">
+            Open full →
+          </Link>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+        {/* Hero */}
+        <div className="md:col-span-3">
+          <div className="text-[10px] uppercase tracking-wide text-ia-muted">Net sales · latest day</div>
+          <div className="ia-currency-hero text-3xl mt-0.5">{fmtCurrency(latestNum, { abbreviate: false })}</div>
+          {sdwDelta != null && (
+            <div className="mt-1 flex items-center gap-1.5 text-xs">
+              {sdwTrend === 'up' && <TrendingUp size={12} className="text-emerald-700" />}
+              {sdwTrend === 'down' && <TrendingDown size={12} className="text-red-700" />}
+              <span className={cn(
+                'font-medium',
+                sdwTrend === 'up' && 'text-emerald-700',
+                sdwTrend === 'down' && 'text-red-700',
+                sdwTrend === 'flat' && 'text-ia-muted',
+              )}>
+                {sdwDelta >= 0 ? '+' : ''}{(sdwDelta * 100).toFixed(1)}%
+              </span>
+              <span className="text-ia-muted">vs same day last week</span>
+            </div>
+          )}
+        </div>
+
+        {/* Sparkline */}
+        <div className="md:col-span-5 px-2">
+          <div className="text-[10px] uppercase tracking-wide text-ia-muted mb-1">Trailing 14 days</div>
+          {points.length >= 2 ? (
+            <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} className="text-ia-teal" preserveAspectRatio="none">
+              <path d={pathD} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+              {lastX > 0 && <circle cx={lastX} cy={lastY} r="2.5" fill="currentColor" />}
+            </svg>
+          ) : (
+            <div className="text-xs text-ia-muted italic py-2">Not enough data for a trend yet.</div>
+          )}
+        </div>
+
+        {/* Stats */}
+        <div className="md:col-span-4 grid grid-cols-3 gap-2 text-xs">
+          <div className="rounded border border-ia-border p-2">
+            <div className="text-[10px] uppercase tracking-wide text-ia-muted">Trail 7d</div>
+            <div className="font-semibold text-ia-navy mt-0.5">{fmtCurrency(t7Num, { abbreviate: true })}</div>
+            <div className="text-[10px] text-ia-muted">{fmtCurrency(t7AvgDaily, { abbreviate: true })}/day</div>
+          </div>
+          <div className="rounded border border-ia-border p-2">
+            <div className="text-[10px] uppercase tracking-wide text-ia-muted">Txns today</div>
+            <div className="font-semibold text-ia-navy mt-0.5">{latestTxn.toLocaleString()}</div>
+            <div className="text-[10px] text-ia-muted">{t7Txn.toLocaleString()} · 7d</div>
+          </div>
+          <div className="rounded border border-ia-border p-2">
+            <div className="text-[10px] uppercase tracking-wide text-ia-muted">$/txn</div>
+            <div className="font-semibold text-ia-navy mt-0.5">{avgTxnValue ? fmtCurrency(avgTxnValue, { abbreviate: false }) : '—'}</div>
+            <div className="text-[10px] text-ia-muted">today</div>
+          </div>
+        </div>
+      </div>
+
+      {Array.isArray(anomalies) && anomalies.length > 0 && (
+        <div className="mt-3 flex items-start gap-2 text-xs text-amber-800 border-t border-ia-border pt-2">
+          <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+          <div className="min-w-0">
+            <span className="font-medium">No 7d sales at:</span>{' '}
+            {anomalies.map((a, i) => (
+              <span key={a.location}>{i > 0 && ', '}{a.location}{a.is_channel ? ' (channel)' : ''}</span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
