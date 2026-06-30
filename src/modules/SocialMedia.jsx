@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 
 import SectionHeader from '../components/SectionHeader.jsx';
+import AskClaudeButton from '../components/AskClaudeButton.jsx';
 import LoadingState from '../components/LoadingState.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import FilterPill from '../components/FilterPill.jsx';
@@ -174,10 +175,18 @@ export default function SocialMedia() {
             drive content generation. Instagram is manual-only; FB and LinkedIn schedule via API.
           </p>
         </div>
-        <button className="ia-button-ghost" onClick={refetchAll} aria-label="Refresh">
+        <div className="flex items-center gap-2">
+          <AskClaudeButton
+            moduleLabel="Social media module"
+            subject="Social media module"
+            context={{ activeTab, accounts: accounts ?? [], scheduled_count: (scheduled ?? []).length, themes: themes ?? [] }}
+            suggestedPrompt="Look at my scheduled posts, published history, and brand voice themes. Suggest what to post next and on which platform."
+          />
+          <button className="ia-button-ghost" onClick={refetchAll} aria-label="Refresh">
           <RefreshCw size={14} />
           <span>Refresh</span>
         </button>
+        </div>
       </header>
 
       {/* Tabs */}

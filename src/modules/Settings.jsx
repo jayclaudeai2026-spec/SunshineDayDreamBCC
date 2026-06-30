@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 
 import SectionHeader from '../components/SectionHeader.jsx';
+import AskClaudeButton from '../components/AskClaudeButton.jsx';
+import PrintButton from '../components/PrintButton.jsx';
 import LoadingState from '../components/LoadingState.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import { supabase } from '../lib/supabase.js';
@@ -26,12 +28,22 @@ export default function Settings() {
   const [activeTab, setActiveTab] = useState('context');
   return (
     <section className="space-y-6">
-      <header>
-        <h1>Settings</h1>
-        <p className="text-sm text-ia-muted mt-1">
-          Read-only view of how your BCC is wired. Edits land in a follow-up release —
-          for now, ask your Claude to update settings via the database directly.
-        </p>
+      <header className="flex items-start justify-between gap-4">
+        <div>
+          <h1>Settings</h1>
+          <p className="text-sm text-ia-muted mt-1">
+            Read-only view of how your BCC is wired. Edits land in a follow-up release —
+            for now, ask your Claude to update settings via the database directly.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <AskClaudeButton
+            moduleLabel="Settings module"
+            subject={`Settings — ${activeTab} tab`}
+            context={{ active_tab: activeTab }}
+            suggestedPrompt="What can I configure here, and what changes would you recommend based on how the BCC is set up?"
+          />
+        </div>
       </header>
 
       <div className="flex border-b border-ia-border overflow-x-auto">

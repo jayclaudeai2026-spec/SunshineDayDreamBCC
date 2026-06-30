@@ -5,6 +5,8 @@ import {
 } from 'lucide-react';
 
 import SectionHeader from '../components/SectionHeader.jsx';
+import AskClaudeButton from '../components/AskClaudeButton.jsx';
+import PrintButton from '../components/PrintButton.jsx';
 import LoadingState from '../components/LoadingState.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import FilterPill from '../components/FilterPill.jsx';
@@ -163,10 +165,19 @@ export default function Automations() {
             entirely.
           </p>
         </div>
-        <button className="ia-button-ghost" onClick={refetch} aria-label="Refresh">
+        <div className="flex items-center gap-2">
+          <PrintButton title="BCC Automations" />
+          <AskClaudeButton
+            moduleLabel="Automations module"
+            subject="Automations module"
+            context={{ activeView, recipes: recipes ?? [], recent_runs: runs ?? [] }}
+            suggestedPrompt="Walk me through my active recipes and recent run history. Anything failing, slow, or worth pausing?"
+          />
+          <button className="ia-button-ghost" onClick={refetch} aria-label="Refresh">
           <RefreshCw size={14} />
           <span>Refresh</span>
         </button>
+        </div>
       </header>
 
       {/* View tabs: Recipes | Templates */}

@@ -12,6 +12,8 @@ import { ShieldCheck, RefreshCw, Save, AlertTriangle, Check } from 'lucide-react
 import { supabase } from '../lib/supabase.js';
 import { useTeamMembers, useBccModules, useMyModuleAccess } from '../lib/hooks.js';
 import LoadingState from '../components/LoadingState.jsx';
+import AskClaudeButton from '../components/AskClaudeButton.jsx';
+import PrintButton from '../components/PrintButton.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import { cn } from '../lib/utils.js';
 
@@ -62,13 +64,22 @@ export default function TeamAccess() {
             Owners see everything by default.
           </p>
         </div>
-        <button
-          onClick={refetch}
-          className="ia-button-ghost text-xs flex items-center gap-1"
-          title="Refresh"
-        >
-          <RefreshCw size={12} /> Refresh
-        </button>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <PrintButton title="BCC Team & Access" />
+          <AskClaudeButton
+            moduleLabel="Team & Access module"
+            subject="Team & Access— permissions audit"
+            context={{ members: memberList, modules: moduleList }}
+            suggestedPrompt="Audit who has access to what. Anything that looks misconfigured or that I should tighten?"
+          />
+          <button
+            onClick={refetch}
+            className="ia-button-ghost text-xs flex items-center gap-1"
+            title="Refresh"
+          >
+            <RefreshCw size={12} /> Refresh
+          </button>
+        </div>
       </header>
 
       <InviteInstructions />
