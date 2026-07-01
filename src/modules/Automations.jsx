@@ -170,7 +170,7 @@ export default function Automations() {
           <AskClaudeButton
             moduleLabel="Automations module"
             subject="Automations module"
-            context={{ activeView, recipes: recipes ?? [], recent_runs: runs ?? [] }}
+            context={{ activeView, recipes: recipes ?? [] }}
             suggestedPrompt="Walk me through my active recipes and recent run history. Anything failing, slow, or worth pausing?"
           />
           <button className="ia-button-ghost" onClick={refetch} aria-label="Refresh">
