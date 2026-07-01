@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   TrendingUp, TrendingDown, DollarSign, ShoppingCart, Receipt,
   Calendar, Award, AlertTriangle, RefreshCw, Activity,
+  Target, CheckCircle2,
 } from 'lucide-react';
 import {
   ResponsiveContainer, LineChart, Line, Tooltip, XAxis, YAxis, CartesianGrid, Legend,
@@ -54,6 +55,16 @@ export default function DailySalesPulse() {
   );
   const rows = rowsRaw ?? [];
 
+  // MTD vs LY-MTD per-entity for bonus tracking (Migration 056 — true Heartland-vs-Heartland).
+  const { data: mtdLyRaw, loading: mtdLyLoading } = useSupabaseQuery(
+    () => supabase
+      .from('dashboard_mtd_vs_ly_view')
+      .select('*')
+      .order('mtd_actual', { ascending: false }),
+    [],
+  );
+  const mtdLyRows = mtdLyRaw ?? [];
+
   // Latest date (already desc sorted)
   const maxDate = rows[0]?.sales_date ?? null;
 
@@ -70,7 +81,7 @@ export default function DailySalesPulse() {
     return rows.filter((r) => r.sales_date >= cutoff);
   }, [rows, cutoff]);
 
-  // Latest-day KPIs
+  // Yesterday KPIs
   const latest = useMemo(() => {
     if (!maxDate) return null;
     const dayRows = rows.filter((r) => r.sales_date === maxDate);
@@ -199,7 +210,7 @@ export default function DailySalesPulse() {
     <div className="space-y-6">
       <SectionHeader
         title="Daily Sales Pulse"
-        description={`Heartland Retail POS — latest day ${fmtDate(latest?.date)} across ${latest?.locationCount ?? 0} locations`}
+        description={`Heartland Retail POS — yesterday ${fmtDate(latest?.date)} across ${latest?.locationCount ?? 0} locations`}
         actions={
           <>
             {RANGES.map((r) => (
@@ -213,7 +224,7 @@ export default function DailySalesPulse() {
             <PrintButton title="BCC Daily Sales Pulse" />
             <AskClaudeButton
               moduleLabel="Daily Sales Pulse"
-              subject={`Latest day ${latest?.date ?? ''} · ${rangeKey} window · ${rows.length} sales rows`}
+              subject={`Yesterday ${latest?.date ?? ''} · ${rangeKey} window · ${rows.length} sales rows`}
               context={{
                 range: rangeKey,
                 latest_date: latest?.date,
@@ -238,33 +249,36 @@ export default function DailySalesPulse() {
         }
       />
 
-      {/* Latest-day KPIs — hero orange on money columns */}
+      {/* Yesterday KPIs — hero orange on money columns */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard
           icon={DollarSign}
-          label="Latest day gross"
+          label="Yesterday gross"
           value={fmtCurrency(latest?.gross ?? 0)}
           sublabel={fmtDate(latest?.date)}
           hero
         />
         <StatCard
           icon={DollarSign}
-          label="Latest day net"
+          label="Yesterday net"
           value={fmtCurrency(latest?.net ?? 0)}
           sublabel={`${(latest?.units ?? 0).toLocaleString()} units sold`}
           hero
         />
         <StatCard
           icon={ShoppingCart}
-          label="Latest day transactions"
+          label="Yesterday transactions"
           value={(latest?.txn ?? 0).toLocaleString()}
         />
         <StatCard
           icon={Receipt}
-          label="Latest day avg ticket"
+          label="Yesterday avg ticket"
           value={fmtCurrency(latest?.avgTicket ?? 0)}
         />
       </div>
+
+      {/* MTD-vs-LY-MTD bonus tracker (Migration 056 — true Heartland-vs-Heartland) */}
+      <MtdVsLySection rows={mtdLyRows} loading={mtdLyLoading} />
 
       {/* Window-level summary */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -514,6 +528,126 @@ function RecentDaysMatrix({ inWindow, perLocation }) {
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MTD-vs-LY-MTD bonus tracker
+// Per-entity MTD progress against same-window LY pace (Heartland-vs-Heartland).
+// Bonus threshold = LY MTD pace × 1.05.
+// ─────────────────────────────────────────────────────────────────────────────
+function MtdVsLySection({ rows, loading }) {
+  if (loading) {
+    return (
+      <div className="bg-ia-card border border-ia-border rounded-lg p-4">
+        <div className="text-sm text-ia-muted">Loading MTD-vs-LY…</div>
+      </div>
+    );
+  }
+  if (!rows || rows.length === 0) {
+    return null;
+  }
+
+  // Group rollup
+  const totals = rows.reduce(
+    (acc, r) => ({
+      mtd_actual:   acc.mtd_actual   + Number(r.mtd_actual   || 0),
+      ly_mtd_pace:  acc.ly_mtd_pace  + Number(r.ly_mtd_pace  || 0),
+    }),
+    { mtd_actual: 0, ly_mtd_pace: 0 },
+  );
+  const bonusTarget = totals.ly_mtd_pace * 1.05;
+  const groupPctVsLy = totals.ly_mtd_pace > 0
+    ? ((totals.mtd_actual - totals.ly_mtd_pace) / totals.ly_mtd_pace) * 100
+    : 0;
+  const groupOnPace = totals.mtd_actual >= bonusTarget;
+
+  // Latest sales date for header (all rows share the same value)
+  const latestDate = rows[0]?.latest_sales_date;
+  const daysElapsed = rows[0]?.days_elapsed;
+
+  return (
+    <div className="bg-ia-card border border-ia-border rounded-lg p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Target size={16} className="text-ia-orange" />
+          <h3 className="text-sm font-medium text-ia-navy">MTD vs LY MTD · bonus pace</h3>
+        </div>
+        <span className="text-xs text-ia-muted">
+          {latestDate ? `Through ${fmtDate(latestDate)} (${daysElapsed} days elapsed)` : ''}
+        </span>
+      </div>
+
+      {/* Group rollup ribbon */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 p-3 bg-ia-cream rounded-md border border-ia-border">
+        <div>
+          <div className="text-xs text-ia-muted">MTD Actual</div>
+          <div className="ia-currency-hero text-lg">{fmtCurrency(totals.mtd_actual)}</div>
+        </div>
+        <div>
+          <div className="text-xs text-ia-muted">LY MTD Pace</div>
+          <div className="text-lg font-medium text-ia-navy tabular-nums">{fmtCurrency(totals.ly_mtd_pace)}</div>
+        </div>
+        <div>
+          <div className="text-xs text-ia-muted">Group vs LY</div>
+          <div className={cn(
+            'text-lg font-medium tabular-nums',
+            groupPctVsLy >= 5 ? 'text-ia-success' : groupPctVsLy >= 0 ? 'text-ia-navy' : 'text-ia-danger',
+          )}>
+            {groupPctVsLy >= 0 ? '+' : ''}{groupPctVsLy.toFixed(1)}%
+          </div>
+        </div>
+        <div>
+          <div className="text-xs text-ia-muted">Bonus Target (LY × 1.05)</div>
+          <div className="flex items-center gap-2">
+            <div className="text-lg font-medium text-ia-navy tabular-nums">{fmtCurrency(bonusTarget)}</div>
+            {groupOnPace && <CheckCircle2 size={18} className="text-ia-success" />}
+          </div>
+        </div>
+      </div>
+
+      {/* Per-store table */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-ia-border">
+              <th className="text-left py-2 px-2 font-medium text-ia-navy">Store</th>
+              <th className="text-left py-2 px-2 font-medium text-ia-navy">Location</th>
+              <th className="text-right py-2 px-2 font-medium text-ia-navy">MTD</th>
+              <th className="text-right py-2 px-2 font-medium text-ia-navy">LY MTD Pace</th>
+              <th className="text-right py-2 px-2 font-medium text-ia-navy">Bonus Target</th>
+              <th className="text-right py-2 px-2 font-medium text-ia-navy">vs LY</th>
+              <th className="text-center py-2 px-2 font-medium text-ia-navy">Bonus</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const target = Number(r.ly_mtd_pace || 0) * 1.05;
+              const pct = Number(r.pct_vs_ly_mtd ?? 0);
+              return (
+                <tr key={r.entity_id} className="border-b border-ia-border last:border-b-0">
+                  <td className="py-1.5 px-2 text-ia-navy whitespace-nowrap font-medium">{r.entity_short_name}</td>
+                  <td className="py-1.5 px-2 text-ia-muted whitespace-nowrap">{r.location_names ?? '—'}</td>
+                  <td className="py-1.5 px-2 text-right tabular-nums text-ia-navy">{fmtCurrency(Number(r.mtd_actual || 0))}</td>
+                  <td className="py-1.5 px-2 text-right tabular-nums text-ia-muted">{fmtCurrency(Number(r.ly_mtd_pace || 0))}</td>
+                  <td className="py-1.5 px-2 text-right tabular-nums text-ia-muted">{fmtCurrency(target)}</td>
+                  <td className={cn(
+                    'py-1.5 px-2 text-right tabular-nums font-medium',
+                    pct >= 5 ? 'text-ia-success' : pct >= 0 ? 'text-ia-navy' : 'text-ia-danger',
+                  )}>
+                    {pct >= 0 ? '+' : ''}{pct.toFixed(1)}%
+                  </td>
+                  <td className="py-1.5 px-2 text-center">
+                    {r.on_pace_for_bonus && <CheckCircle2 size={16} className="text-ia-success inline" />}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

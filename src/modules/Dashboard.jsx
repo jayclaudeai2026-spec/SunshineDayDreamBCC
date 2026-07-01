@@ -50,6 +50,12 @@ export default function Dashboard() {
     [],
   );
 
+  // MTD vs LY-MTD per-entity for bonus tracking (Migration 056 — true Heartland-vs-Heartland).
+  const { data: mtdLyRows } = useSupabaseQuery(
+    () => supabase.from('dashboard_mtd_vs_ly_view').select('*').order('mtd_actual', { ascending: false }),
+    [],
+  );
+
   // 12-month trailing chart — only include months with >=8 entities reporting
   // so partial-coverage months don't drag the line to zero.
   const { data: monthlyRows } = useSupabaseQuery(
@@ -197,6 +203,7 @@ export default function Dashboard() {
         pulse={pulse}
         loading={pulseLoading}
         onRefresh={refetchPulse}
+        mtdLyRows={mtdLyRows}
       />
 
       {/* ---------------------------------------------------------------- */}
@@ -760,7 +767,7 @@ function MorningBriefingCard({ briefing, loading, onRefresh }) {
 // Single hero number with sparkline + same-day-last-week comparison.
 // ---------------------------------------------------------------------------
 
-function SalesPulseCard({ pulse, loading, onRefresh }) {
+function SalesPulseCard({ pulse, loading, onRefresh, mtdLyRows }) {
   if (loading && !pulse) {
     return (
       <div className="ia-card">
@@ -839,7 +846,7 @@ function SalesPulseCard({ pulse, loading, onRefresh }) {
           <div className="min-w-0">
             <h2 className="text-base font-semibold text-ia-navy">Sales pulse</h2>
             <p className="text-xs text-ia-muted mt-0.5">
-              Latest day {fmtDate(latest_sales_date, 'PPP')} · all locations + channels
+              Yesterday {fmtDate(latest_sales_date, 'PPP')} · all locations + channels
             </p>
           </div>
         </div>
@@ -856,7 +863,7 @@ function SalesPulseCard({ pulse, loading, onRefresh }) {
       <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
         {/* Hero */}
         <div className="md:col-span-3">
-          <div className="text-[10px] uppercase tracking-wide text-ia-muted">Net sales · latest day</div>
+          <div className="text-[10px] uppercase tracking-wide text-ia-muted">Net sales · yesterday</div>
           <div className="ia-currency-hero text-3xl mt-0.5">{fmtCurrency(latestNum, { abbreviate: false })}</div>
           {sdwDelta != null && (
             <div className="mt-1 flex items-center gap-1.5 text-xs">
@@ -907,6 +914,56 @@ function SalesPulseCard({ pulse, loading, onRefresh }) {
           </div>
         </div>
       </div>
+
+      {Array.isArray(mtdLyRows) && mtdLyRows.length > 0 && (() => {
+        const totals = mtdLyRows.reduce(
+          (acc, r) => ({
+            mtd_actual:  acc.mtd_actual  + Number(r.mtd_actual  || 0),
+            ly_mtd_pace: acc.ly_mtd_pace + Number(r.ly_mtd_pace || 0),
+          }),
+          { mtd_actual: 0, ly_mtd_pace: 0 },
+        );
+        const target = totals.ly_mtd_pace * 1.05;
+        const pct = totals.ly_mtd_pace > 0
+          ? ((totals.mtd_actual - totals.ly_mtd_pace) / totals.ly_mtd_pace) * 100
+          : 0;
+        const onPace = totals.mtd_actual >= target;
+        const storesOnPace = mtdLyRows.filter((r) => r.on_pace_for_bonus).length;
+        return (
+          <div className="mt-3 border-t border-ia-border pt-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[10px] uppercase tracking-wide text-ia-muted">Month-to-date vs LY MTD pace</div>
+              <div className="text-[10px] text-ia-muted">{storesOnPace}/{mtdLyRows.length} stores on bonus pace</div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div>
+                <div className="text-[10px] uppercase tracking-wide text-ia-muted">MTD Actual</div>
+                <div className="ia-currency-hero text-lg">{fmtCurrency(totals.mtd_actual, { abbreviate: false })}</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wide text-ia-muted">LY MTD Pace</div>
+                <div className="text-lg font-semibold text-ia-navy tabular-nums">{fmtCurrency(totals.ly_mtd_pace, { abbreviate: false })}</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wide text-ia-muted">vs LY</div>
+                <div className={cn(
+                  'text-lg font-semibold tabular-nums',
+                  pct >= 5 ? 'text-emerald-700' : pct >= 0 ? 'text-ia-navy' : 'text-red-700',
+                )}>
+                  {pct >= 0 ? '+' : ''}{pct.toFixed(1)}%
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wide text-ia-muted">Bonus Target</div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-lg font-semibold text-ia-navy tabular-nums">{fmtCurrency(target, { abbreviate: false })}</span>
+                  {onPace && <CheckCircle2 size={16} className="text-emerald-700" />}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {Array.isArray(anomalies) && anomalies.length > 0 && (
         <div className="mt-3 flex items-start gap-2 text-xs text-amber-800 border-t border-ia-border pt-2">

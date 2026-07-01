@@ -145,7 +145,10 @@ export default function BCCApp() {
     return allowedSet.has(n.key);
   });
 
-  const clientName = ctx?.display_name ?? 'Sunshine Daydream BCC';
+  // HQ branding override: header reads 'Sunshine Daydream Headquarters' regardless of
+  // client_context.display_name. The legal entity name (display_name) is preserved in the DB
+  // because it's used by tax filings, QB sync, outbound emails, and document templates.
+  const clientName = 'Sunshine Daydream Headquarters';
 
   return (
     <div className="min-h-screen flex flex-col">
