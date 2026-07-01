@@ -179,7 +179,7 @@ export default function SocialMedia() {
           <AskClaudeButton
             moduleLabel="Social media module"
             subject="Social media module"
-            context={{ activeTab, accounts: accounts ?? [], scheduled_count: (scheduled ?? []).length, themes: themes ?? [] }}
+            context={{ activeTab, accounts: accounts ?? [], scheduled_count: scheduledPosts.length, themes: themes ?? [] }}
             suggestedPrompt="Look at my scheduled posts, published history, and brand voice themes. Suggest what to post next and on which platform."
           />
           <button className="ia-button-ghost" onClick={refetchAll} aria-label="Refresh">
