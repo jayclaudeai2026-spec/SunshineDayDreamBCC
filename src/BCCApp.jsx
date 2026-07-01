@@ -12,7 +12,7 @@ import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, BarChart3, FileText, Brain, Workflow,
   Bell, Settings as SettingsIcon, ListChecks,
-  Megaphone, Users, Receipt, ShieldCheck, Sun, Moon, Network, Activity, BookOpen,
+  Megaphone, Users, Receipt, ShieldCheck, Sun, Moon, Network, Activity, BookOpen, Compass,
 } from 'lucide-react';
 
 import NavItem from './components/NavItem.jsx';
@@ -31,6 +31,7 @@ import DailySalesPulse     from './modules/DailySalesPulse.jsx';
 import Financials          from './modules/Financials.jsx';
 import Documents           from './modules/Documents.jsx';
 import PersistentMemory    from './modules/PersistentMemory.jsx';
+import PlaybookGuide      from './modules/PlaybookGuide.jsx';
 import Automations         from './modules/Automations.jsx';
 import AlertsNotifications from './modules/AlertsNotifications.jsx';
 import Settings            from './modules/Settings.jsx';
@@ -51,6 +52,7 @@ const NAV = [
   { key: 'financials',  to: '/financials',                label: 'Financials',    icon: BarChart3 },
   { key: 'documents',   to: '/documents',                 label: 'Documents',     icon: FileText },
   { key: 'memory',      to: '/memory',                    label: 'Memory',        icon: Brain },
+  { key: 'playbook',    to: '/playbook',                  label: 'Playbook & Guide', icon: Compass },
   { key: 'automations', to: '/automations',               label: 'Automations',   icon: Workflow },
   { key: 'alerts',      to: '/alerts',                    label: 'Alerts',        icon: Bell },
   { key: 'tasks',       to: '/tasks',                     label: 'Tasks & Goals', icon: ListChecks },
@@ -210,6 +212,7 @@ export default function BCCApp() {
             <Route path="/financials/*" element={<GateRoute moduleKey="financials"  allowedSet={allowedSet}><Financials /></GateRoute>} />
             <Route path="/documents/*"  element={<GateRoute moduleKey="documents"   allowedSet={allowedSet}><Documents /></GateRoute>} />
             <Route path="/memory/*"     element={<GateRoute moduleKey="memory"      allowedSet={allowedSet}><PersistentMemory /></GateRoute>} />
+            <Route path="/playbook/*"  element={<GateRoute moduleKey="playbook"    allowedSet={allowedSet}><PlaybookGuide /></GateRoute>} />
             <Route path="/automations/*" element={<GateRoute moduleKey="automations" allowedSet={allowedSet}><Automations /></GateRoute>} />
             <Route path="/alerts"       element={<GateRoute moduleKey="alerts"      allowedSet={allowedSet}><AlertsNotifications /></GateRoute>} />
             <Route path="/tasks"        element={<GateRoute moduleKey="tasks"       allowedSet={allowedSet}><TasksGoals /></GateRoute>} />

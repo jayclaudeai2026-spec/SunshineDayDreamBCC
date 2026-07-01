@@ -47,6 +47,9 @@
   /* Shadows */
   --ia-shadow-card: 0 1px 2px rgba(26, 39, 68, 0.06), 0 4px 12px rgba(26, 39, 68, 0.04);
   --ia-shadow-elevated: 0 4px 16px rgba(26, 39, 68, 0.10);
+
+  --ia-warning-lt: #FEF3C7;
+  --ia-surface: #FFFFFF;
 }
 
 :root[data-theme="dark"] {
