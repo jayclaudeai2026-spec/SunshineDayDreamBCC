@@ -5,7 +5,8 @@ import {
   Target, CheckCircle2,
 } from 'lucide-react';
 import {
-  ResponsiveContainer, LineChart, Line, Tooltip, XAxis, YAxis, CartesianGrid, Legend,
+  ResponsiveContainer, LineChart, Line, BarChart, Bar,
+  Tooltip, XAxis, YAxis, CartesianGrid, Legend,
 } from 'recharts';
 
 import StatCard from '../components/StatCard.jsx';
@@ -64,6 +65,13 @@ export default function DailySalesPulse() {
     [],
   );
   const mtdLyRows = mtdLyRaw ?? [];
+
+  // 24-month YoY sales (Migration 059 — group-level Heartland monthly totals + same-month LY).
+  const { data: yoyRaw } = useSupabaseQuery(
+    () => supabase.from('heartland_monthly_yoy_view').select('*').order('period', { ascending: true }),
+    [],
+  );
+  const yoyRows = yoyRaw ?? [];
 
   // Latest date (already desc sorted)
   const maxDate = rows[0]?.sales_date ?? null;
@@ -368,6 +376,9 @@ export default function DailySalesPulse() {
         </div>
       </div>
 
+      {/* 24-month YoY comparison chart (Migration 059) */}
+      {yoyRows.length > 0 && <YoYChart rows={yoyRows} />}
+
       {/* Per-location cards */}
       <div>
         <SectionHeader
@@ -647,6 +658,127 @@ function MtdVsLySection({ rows, loading }) {
             })}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 24-month YoY sales chart
+// Two-series line chart: current period net_sales vs same-month prior year.
+// Current partial month uses MTD-truncated LY for a fair comparison.
+// ─────────────────────────────────────────────────────────────────────────────
+function YoYChart({ rows }) {
+  const chartData = useMemo(() => rows.map((r) => ({
+    period: r.period ? r.period.slice(0, 7) : '',
+    ty:  Number(r.net_sales ?? 0),
+    ly:  r.ly_net_sales != null ? Number(r.ly_net_sales) : null,
+    yoy: r.yoy_pct_fair != null ? Number(r.yoy_pct_fair) : null,
+    is_partial: !!r.is_partial_month,
+  })), [rows]);
+
+  // Headline: last complete month's YoY %
+  const lastComplete = useMemo(() => {
+    const complete = chartData.filter((d) => !d.is_partial && d.yoy != null);
+    return complete[complete.length - 1] ?? null;
+  }, [chartData]);
+
+  // Trailing 12 avg YoY %
+  const t12AvgYoy = useMemo(() => {
+    const withYoy = chartData.filter((d) => d.yoy != null);
+    const t12 = withYoy.slice(-12);
+    if (t12.length === 0) return null;
+    return t12.reduce((s, d) => s + d.yoy, 0) / t12.length;
+  }, [chartData]);
+
+  return (
+    <div className="bg-ia-card border border-ia-border rounded-lg p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h3 className="text-sm font-medium text-ia-navy">24-month year-over-year</h3>
+          <p className="text-xs text-ia-muted mt-0.5">
+            Group net sales vs same month prior year (Heartland POS only)
+          </p>
+        </div>
+        <div className="flex items-center gap-4 text-xs">
+          {lastComplete && (
+            <div className="text-right">
+              <div className="text-[10px] uppercase tracking-wide text-ia-muted">Last full month</div>
+              <div className={cn(
+                'font-semibold tabular-nums',
+                lastComplete.yoy >= 0 ? 'text-ia-success' : 'text-ia-danger',
+              )}>
+                {lastComplete.yoy >= 0 ? '+' : ''}{lastComplete.yoy.toFixed(1)}%
+              </div>
+            </div>
+          )}
+          {t12AvgYoy != null && (
+            <div className="text-right">
+              <div className="text-[10px] uppercase tracking-wide text-ia-muted">T12 avg YoY</div>
+              <div className={cn(
+                'font-semibold tabular-nums',
+                t12AvgYoy >= 0 ? 'text-ia-success' : 'text-ia-danger',
+              )}>
+                {t12AvgYoy >= 0 ? '+' : ''}{t12AvgYoy.toFixed(1)}%
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="h-72">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--ia-border)" />
+            <XAxis
+              dataKey="period"
+              stroke="var(--ia-muted)"
+              tick={{ fontSize: 11 }}
+              tickFormatter={(d) => d.slice(2)}
+              minTickGap={12}
+            />
+            <YAxis
+              stroke="var(--ia-muted)"
+              tick={{ fontSize: 11 }}
+              tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+              width={55}
+            />
+            <Tooltip
+              contentStyle={{
+                background: 'var(--ia-card)',
+                border: '1px solid var(--ia-border)',
+                borderRadius: 6,
+                fontSize: 12,
+                color: 'var(--ia-ink)',
+              }}
+              labelFormatter={(d) => `Period ${d}`}
+              formatter={(v, name) => [fmtCurrency(v), name]}
+            />
+            <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
+            <Line
+              type="monotone"
+              dataKey="ty"
+              name="This year"
+              stroke="var(--ia-orange)"
+              strokeWidth={2}
+              dot={{ r: 2 }}
+              activeDot={{ r: 4 }}
+              isAnimationActive={false}
+            />
+            <Line
+              type="monotone"
+              dataKey="ly"
+              name="Same month LY"
+              stroke="var(--ia-teal)"
+              strokeWidth={2}
+              strokeDasharray="4 4"
+              dot={{ r: 2 }}
+              activeDot={{ r: 4 }}
+              isAnimationActive={false}
+              connectNulls={false}
+            />
+          </LineChart>
+        </ResponsiveContainer>
       </div>
     </div>
   );

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   Calendar, AlertTriangle, AlertCircle, CheckCircle2, Clock,
   ChevronDown, ChevronRight, RefreshCw, FileText, MapPin, User, Building2, ExternalLink,
-  TrendingUp, TrendingDown, Minus, Target,
+  TrendingUp, TrendingDown, Minus, Target, Calculator, DollarSign,
 } from 'lucide-react';
 
 import SectionHeader from '../components/SectionHeader.jsx';
@@ -207,6 +207,16 @@ export default function TaxCenter() {
     [],
   );
 
+  // Personal tab: Phase B v1 projection engine (Migration 061).
+  // Returns a single-row jsonb with projection breakdown + safe-harbor + entity contribution.
+  const projectionQ = useSupabaseQuery(
+    () => supabase
+      .from('personal_tax_projection_current_view')
+      .select('*')
+      .maybeSingle(),
+    [],
+  );
+
   const upcoming = upcomingQ.data ?? [];
   const filed = calendarQ.data ?? [];
   const payments = paymentsQ.data ?? [];
@@ -215,6 +225,7 @@ export default function TaxCenter() {
   const taxDocs = taxDocsQ.data ?? [];
   const personalFilings = personalQ.data ?? [];
   const personalCandidates = candidatesQ.data ?? [];
+  const personalProjection = projectionQ.data?.projection ?? null;
 
   const loading = upcomingQ.loading || calendarQ.loading || profilesQ.loading || forecastQ.loading || personalQ.loading;
 
@@ -226,6 +237,7 @@ export default function TaxCenter() {
     forecastQ.refetch();
     taxDocsQ.refetch();
     personalQ.refetch();
+    projectionQ.refetch();
   };
 
   // Split upcoming into not-yet-due and past-due based on days_until_due
@@ -833,6 +845,11 @@ export default function TaxCenter() {
             </div>
           </div>
 
+          {/* Phase B v1 projection panel */}
+          {personalProjection && (
+            <PersonalProjectionCard projection={personalProjection} />
+          )}
+
           {personalCandidates.length > 0 && (
             <div className="ia-card border-l-4 border-l-amber-500">
               <div className="flex items-start gap-3 mb-3">
@@ -1178,6 +1195,216 @@ function ObligationRow({ obl, expanded, onToggle, payments, pastDue }) {
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Personal Tax Cockpit — Phase B v1 projection panel
+// Renders the output of public.compute_personal_tax_projection_v1(tax_year).
+// Sections: hero total, calculations, safe harbor + quarterly schedule,
+// entity contribution table, notes/disclaimers.
+// ─────────────────────────────────────────────────────────────────────────────
+function PersonalProjectionCard({ projection }) {
+  const p = projection ?? {};
+  const inputs = p.inputs ?? {};
+  const calcs = p.calculations ?? {};
+  const sh = p.safe_harbor ?? {};
+  const breakdown = Array.isArray(p.entity_breakdown) ? p.entity_breakdown : [];
+  const notes = Array.isArray(p.notes) ? p.notes : [];
+  const disclaimers = Array.isArray(p.disclaimers) ? p.disclaimers : [];
+
+  const passthroughNi = Number(inputs.projected_passthrough_ni ?? 0);
+  const passthroughSign = passthroughNi < 0 ? 'text-ia-danger' : 'text-ia-navy';
+
+  return (
+    <div className="ia-card">
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div className="flex items-start gap-3 min-w-0">
+          <div className="flex-shrink-0 w-10 h-10 rounded-full bg-ia-orange/15 text-ia-orange flex items-center justify-center">
+            <Calculator size={20} />
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold text-ia-navy">
+              TY {p.tax_year} projection · Phase B v1
+            </h3>
+            <p className="text-xs text-ia-muted mt-0.5">
+              MFJ · as of {p.as_of_date} · method {p.method_version}
+            </p>
+          </div>
+        </div>
+        <div className="text-right flex-shrink-0">
+          <div className="text-[10px] uppercase tracking-wide text-ia-muted">Projected total tax</div>
+          <div className="ia-currency-hero text-2xl">{fmtCurrency(calcs.total_projected_tax)}</div>
+          <div className="text-[10px] text-ia-muted mt-0.5">
+            Fed {fmtCurrency(calcs.federal_tax)} + State {fmtCurrency(calcs.state_tax)}
+          </div>
+        </div>
+      </div>
+
+      {/* Calculations strip */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <div className="rounded border border-ia-border p-3">
+          <div className="text-[10px] uppercase tracking-wide text-ia-muted">Passthrough NI</div>
+          <div className={cn('text-lg font-semibold tabular-nums mt-0.5', passthroughSign)}>
+            {fmtCurrency(passthroughNi)}
+          </div>
+          <div className="text-[10px] text-ia-muted mt-0.5">
+            QBI base {fmtCurrency(inputs.qbi_base, { abbreviate: true })}
+          </div>
+        </div>
+        <div className="rounded border border-ia-border p-3">
+          <div className="text-[10px] uppercase tracking-wide text-ia-muted">Taxable income</div>
+          <div className="text-lg font-semibold text-ia-navy tabular-nums mt-0.5">
+            {fmtCurrency(calcs.taxable_income)}
+          </div>
+          <div className="text-[10px] text-ia-muted mt-0.5">
+            After QBI −{fmtCurrency(calcs.qbi_deduction, { abbreviate: true })}
+          </div>
+        </div>
+        <div className="rounded border border-ia-border p-3">
+          <div className="text-[10px] uppercase tracking-wide text-ia-muted">Marginal bracket</div>
+          <div className="text-lg font-semibold text-ia-navy tabular-nums mt-0.5">
+            {calcs.marginal_bracket_pct}%
+          </div>
+          <div className="text-[10px] text-ia-muted mt-0.5">2025 MFJ brackets</div>
+        </div>
+        <div className="rounded border border-ia-border p-3">
+          <div className="text-[10px] uppercase tracking-wide text-ia-muted">State effective</div>
+          <div className="text-lg font-semibold text-ia-navy tabular-nums mt-0.5">
+            {calcs.state_effective_pct}%
+          </div>
+          <div className="text-[10px] text-ia-muted mt-0.5">
+            from TY {calcs.state_effective_source_year}
+          </div>
+        </div>
+      </div>
+
+      {/* Safe harbor + quarterly */}
+      <div className="rounded-lg border border-ia-border bg-ia-cream/40 p-4 mb-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Target size={16} className="text-ia-teal" />
+            <h4 className="text-sm font-medium text-ia-navy">Safe harbor · quarterly estimated payments</h4>
+          </div>
+          <span className="text-[10px] text-ia-muted">{sh.method}</span>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+          <div>
+            <div className="text-[10px] uppercase tracking-wide text-ia-muted">Required annual</div>
+            <div className="ia-currency-hero text-lg">{fmtCurrency(sh.required_annual)}</div>
+            <div className="text-[10px] text-ia-muted mt-0.5">
+              Prior year {fmtCurrency(sh.prior_year_total_tax, { abbreviate: true })}
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wide text-ia-muted">Per quarter</div>
+            <div className="text-lg font-semibold text-ia-navy tabular-nums">
+              {fmtCurrency(sh.quarterly_amount)}
+            </div>
+          </div>
+          {['q1', 'q2', 'q3', 'q4'].map((q) => (
+            <div key={q}>
+              <div className="text-[10px] uppercase tracking-wide text-ia-muted">{q.toUpperCase()} due</div>
+              <div className="text-sm font-medium text-ia-navy">
+                {sh[`${q}_due`] ? fmtDate(sh[`${q}_due`], 'MMM d') : '—'}
+              </div>
+              <div className="text-[10px] text-ia-muted mt-0.5">
+                {fmtCurrency(sh.quarterly_amount, { abbreviate: true })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Entity breakdown */}
+      {breakdown.length > 0 && (
+        <div className="mb-4">
+          <div className="flex items-center gap-2 mb-2">
+            <DollarSign size={14} className="text-ia-muted" />
+            <h4 className="text-sm font-medium text-ia-navy">Passthrough contribution</h4>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-ia-border">
+                  <th className="text-left py-2 px-2 font-medium text-ia-navy">Entity</th>
+                  <th className="text-left py-2 px-2 font-medium text-ia-navy">Type</th>
+                  <th className="text-left py-2 px-2 font-medium text-ia-navy">State</th>
+                  <th className="text-right py-2 px-2 font-medium text-ia-navy">Projected NI</th>
+                  <th className="text-right py-2 px-2 font-medium text-ia-navy">QBI contrib</th>
+                  <th className="text-right py-2 px-2 font-medium text-ia-navy">YoY %</th>
+                  <th className="text-left py-2 px-2 font-medium text-ia-navy">Quality</th>
+                </tr>
+              </thead>
+              <tbody>
+                {breakdown.map((e, i) => {
+                  const ni = Number(e.projected_annual_ni ?? 0);
+                  const yoy = Number(e.yoy_ni_pct ?? 0);
+                  const outlier = e.projection_quality === 'outlier_distorted';
+                  return (
+                    <tr key={e.entity_short_name || i} className="border-b border-ia-border last:border-b-0">
+                      <td className="py-1.5 px-2 text-ia-navy whitespace-nowrap font-medium">
+                        {e.entity_short_name}
+                      </td>
+                      <td className="py-1.5 px-2 text-ia-muted whitespace-nowrap">{e.entity_type}</td>
+                      <td className="py-1.5 px-2 text-ia-muted">{e.primary_state}</td>
+                      <td className={cn(
+                        'py-1.5 px-2 text-right tabular-nums font-medium',
+                        ni >= 0 ? 'text-ia-navy' : 'text-ia-danger',
+                      )}>
+                        {fmtCurrency(ni, { abbreviate: true })}
+                      </td>
+                      <td className="py-1.5 px-2 text-right tabular-nums text-ia-muted">
+                        {fmtCurrency(e.contributes_to_qbi, { abbreviate: true })}
+                      </td>
+                      <td className={cn(
+                        'py-1.5 px-2 text-right tabular-nums',
+                        Math.abs(yoy) > 100 ? 'text-ia-muted' :
+                          yoy >= 0 ? 'text-ia-success' : 'text-ia-danger',
+                      )}>
+                        {yoy >= 0 ? '+' : ''}{yoy.toFixed(0)}%
+                      </td>
+                      <td className="py-1.5 px-2">
+                        {outlier ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
+                            <AlertTriangle size={9} />outlier
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-ia-muted">{e.projection_quality}</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Notes */}
+      {notes.length > 0 && (
+        <div className="rounded-md bg-amber-50 border border-amber-200 p-3 mb-3">
+          <div className="flex items-start gap-2">
+            <AlertCircle size={14} className="text-amber-700 mt-0.5 flex-shrink-0" />
+            <div className="text-xs text-amber-900 space-y-1">
+              {notes.map((n, i) => <div key={i}>{n}</div>)}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Disclaimers */}
+      {disclaimers.length > 0 && (
+        <details className="text-[11px] text-ia-muted">
+          <summary className="cursor-pointer hover:text-ia-navy">Method & disclaimers</summary>
+          <ul className="mt-2 space-y-1 list-disc list-inside">
+            {disclaimers.map((d, i) => <li key={i}>{d}</li>)}
+          </ul>
+        </details>
       )}
     </div>
   );
