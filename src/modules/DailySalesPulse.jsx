@@ -637,9 +637,14 @@ function MtdVsLySection({ rows, loading }) {
             {rows.map((r) => {
               const target = Number(r.ly_mtd_pace || 0) * 1.05;
               const pct = Number(r.pct_vs_ly_mtd ?? 0);
+              // Migration 068: dashboard_mtd_vs_ly_view now aggregates entities sharing
+              // bonus_display_group_key into one row (currently Delmar Loop + Emporium).
+              // For grouped rows, entity_short_name is a display_key (e.g. "delmar-loop-group")
+              // — show legal_name ("Delmar Loop + Emporium") instead so the UI reads clean.
+              const storeLabel = r.is_display_group ? r.legal_name : r.entity_short_name;
               return (
-                <tr key={r.entity_id} className="border-b border-ia-border last:border-b-0">
-                  <td className="py-1.5 px-2 text-ia-navy whitespace-nowrap font-medium">{r.entity_short_name}</td>
+                <tr key={r.entity_id ?? r.entity_short_name} className="border-b border-ia-border last:border-b-0">
+                  <td className="py-1.5 px-2 text-ia-navy whitespace-nowrap font-medium">{storeLabel}</td>
                   <td className="py-1.5 px-2 text-ia-muted whitespace-nowrap">{r.location_names ?? '—'}</td>
                   <td className="py-1.5 px-2 text-right tabular-nums text-ia-navy">{fmtCurrency(Number(r.mtd_actual || 0))}</td>
                   <td className="py-1.5 px-2 text-right tabular-nums text-ia-muted">{fmtCurrency(Number(r.ly_mtd_pace || 0))}</td>
