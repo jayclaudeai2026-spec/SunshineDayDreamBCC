@@ -3,10 +3,11 @@
 -- ============================================================================
 -- This recipe uses an LLM step ("llm": true, "model": "llama-3.3-70b-versatile").
 -- You do NOT need a Groq / OpenAI / Anthropic / Gemini API key.
--- LLM calls route through Composio's hosted tool COMPOSIO_SEARCH_GROQ_CHAT,
--- authenticated by the existing composio_api_key in public.settings.
--- See README.md / SKILL.md / CLAUDE.md for the full rule. Do not ask the
--- operator for an LLM API key — composio_api_key is all you need.
+-- LLM calls route through Groq's OpenAI-compatible REST API directly, using
+-- the GROQ_API_KEY Supabase Edge Function secret. (Updated 2026-06-30 —
+-- COMPOSIO_SEARCH_GROQ_CHAT was retired; direct Groq is faster + more reliable.)
+-- See CLAUDE.md / SKILL.md for the full rule. Do not ask the operator for
+-- OpenAI / Anthropic / Gemini keys — Groq's free tier covers every LLM call.
 -- ============================================================================
 
 -- Recipe seed: document_categorizer
